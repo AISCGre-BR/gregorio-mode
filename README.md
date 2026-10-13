@@ -128,7 +128,9 @@ prepended when the line does not start with one.
 - Editing a line removes its preview. Previewing again only regenerates lines
   that changed.
 - Lines that fail to compile are marked with ⚠; hover over the mark for the
-  message, or see the `*gregorio-preview*` buffer.
+  message. A LaTeX error only affects the line that caused it.
+  `C-c C-p C-e` (or a click on ⚠) explains the error, with shortcuts to the
+  log, the master document and the preamble settings.
 - Previews are generated asynchronously; `C-c C-p C-k` aborts a running job.
 
 | Key | Command |
@@ -139,7 +141,45 @@ prepended when the line does not start with one.
 | `C-c C-p C-c C-p` | `gregorio-preview-clearout-at-point` |
 | `C-c C-p C-c C-r` | `gregorio-preview-clearout-region` |
 | `C-c C-p C-c C-b` | `gregorio-preview-clearout-buffer` |
+| `C-c C-p C-e` | `gregorio-preview-explain-error` |
 | `C-c C-p C-k` | `gregorio-preview-abort` |
+| — | `gregorio-preview-add-local-preamble` |
+
+### LaTeX packages used by the score
+
+GABC files may contain arbitrary LaTeX, such as `<v>\tikzmarknode{a}{…}</v>`,
+which needs packages that a bare preview document does not load. The preview
+document gets them from three places:
+
+1. **The master document.** By default, gregorio-mode looks for a `.tex` file
+   that includes the score with `\gregorioscore{…}` (or `\includescore`). The
+   search starts in the directory of the GABC file and goes up
+   `gregorio-preview-master-search-depth` levels (3), never above the project
+   root. Its preamble (everything before `\begin{document}`) is reused, as are
+   the GregorioTeX setup commands (`\gresetX…`, `\grechangeX…`) that come
+   before the score in the document body. The directories of the master
+   document and of the GABC file are added to `TEXINPUTS`, so that relative
+   `\input` and local packages work. Set `gregorio-preview-master` to a file
+   name to choose the master document, or to `none` to disable this.
+2. **`gregorio-preview-preamble`**, globally or per file.
+   `M-x gregorio-preview-add-local-preamble` writes it as a file-local
+   variable:
+
+   ```gabc
+   % Local Variables:
+   % gregorio-preview-preamble: "\\usepackage{tikz}\\usetikzlibrary{tikzmark}"
+   % End:
+   ```
+
+   Both variables also work in `.dir-locals.el`.
+3. **`gregorio-preview-latex-passes`**: set it to `2` for packages that only
+   place their elements on a second LuaLaTeX run, such as tikzmark with
+   `remember picture`.
+
+> **Security**: previews run LuaLaTeX on the LaTeX code of the score and of
+> the master document, and LuaLaTeX can run Lua code. Only preview files you
+> trust. Emacs asks before applying file-local values of
+> `gregorio-preview-preamble` and `gregorio-preview-master`.
 
 **Requirements**: `gregorio`, LuaLaTeX with GregorioTeX and `preview.sty` (all
 included in TeX Live), and `pdftocairo` (poppler). The versions of `gregorio`
@@ -152,8 +192,14 @@ and GregorioTeX must match.
 ;; Line width: nil follows the window width, or a TeX dimension.
 (setq gregorio-preview-text-width "15cm")
 
-;; Extra LaTeX preamble code (fonts, GregorioTeX settings, ...).
-(setq gregorio-preview-preamble "\\grechangestaffsize{15}")
+;; Extra LaTeX preamble code (packages, fonts, GregorioTeX settings, ...).
+(setq gregorio-preview-preamble "\\usepackage{tikz}\\usetikzlibrary{tikzmark}")
+
+;; Master document whose preamble is reused (nil: find it; none: disable).
+(setq gregorio-preview-master nil)
+
+;; Number of LuaLaTeX runs.
+(setq gregorio-preview-latex-passes 1)
 
 ;; Render scores in black instead of the theme's foreground color.
 (setq gregorio-preview-use-face-color nil)

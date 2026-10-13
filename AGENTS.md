@@ -91,14 +91,23 @@ downloads of the server binary.
 - `gregorio-preview--chunks` turns each non-blank, non-comment body line into a
   standalone GABC document. The document repeats the header (`annotation` is
   dropped after the first line) and prepends the clef in effect.
-- A job runs `gregorio` on each chunk, then a single LuaLaTeX run (one
-  `preview` environment per chunk, `\gregorioscore[n]{chunk-N.gtex}`), then
-  `pdftocairo`. Each step is an asynchronous process chained through
-  sentinels. Pages map to the chunks that compiled, in order.
+- A job runs `gregorio` on each chunk, then LuaLaTeX
+  (`gregorio-preview-latex-passes` runs, one `preview` environment per chunk,
+  `\gregorioscore[n]{chunk-N.gtex}`), then `pdftocairo`. Each step is an
+  asynchronous process chained through sentinels.
+- preview.sty is loaded with the `auctex` option, so the log marks where each
+  snippet starts and ends. `gregorio-preview--parse-log` assigns each error to
+  its snippet, and snippet N is page N of the PDF. Do not add
+  `-halt-on-error`: one bad line must not discard the others.
+- The preamble comes from the master document (`gregorio-preview--find-master`,
+  `gregorio-preview--master-preamble`) and `gregorio-preview-preamble`.
+  `\PassOptionsToPackage` comes before the master's `\documentclass`, and the
+  line width is set after `\begin{document}`, so that geometry and the
+  master's own `preview` loading do not get in the way.
 - Overlay states: `busy`, `shown`, `revealed`, `error`. Images are stored as
   data on the overlay, so the temporary directory is deleted when the job
   ends. The cache key (`gregorio-preview--key`) covers the chunk text and the
-  rendering settings.
+  rendering settings, including the master preamble.
 - The integration tests are skipped when the toolchain is not installed.
 
 ## 5. Conventions

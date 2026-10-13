@@ -100,11 +100,15 @@ ple(g)na.(f) (::)
               '(("chunk-1.gtex" . t) ("chunk-2.gtex" . nil))
               '(:width "300pt" :color "FFFFFF"
                 :preamble "\\grechangestaffsize{15}"))))
+    (should (string-prefix-p
+             "\\PassOptionsToPackage{active,tightpage,auctex}{preview}\n\\documentclass{article}"
+             tex))
     (should (string-match-p "\\\\usepackage{gregoriotex}" tex))
-    (should (string-match-p "\\\\usepackage\\[active,tightpage\\]{preview}" tex))
-    (should (string-match-p "\\\\setlength{\\\\textwidth}{300pt}" tex))
+    (should (string-match-p "\\\\usepackage{preview}" tex))
+    (should (string-match-p
+             "\\\\begin{document}\n\\\\setlength{\\\\textwidth}{300pt}" tex))
     (should (string-match-p "\\\\color\\[HTML\\]{FFFFFF}" tex))
-    (should (string-match-p "\\\\grechangestaffsize{15}" tex))
+    (should (string-match-p "\\\\grechangestaffsize{15}\n\\\\begin{document}" tex))
     (should (string-match-p
              "\\\\gresetinitiallines{1}\\\\gregorioscore\\[n\\]{chunk-1.gtex}"
              tex))
@@ -112,11 +116,175 @@ ple(g)na.(f) (::)
              "\\\\gresetinitiallines{0}\\\\gregorioscore\\[n\\]{chunk-2.gtex}"
              tex))))
 
+(ert-deftest gregorio-preview-test-latex-document-master ()
+  (let ((tex (gregorio-preview--latex-document
+              '(("chunk-1.gtex" . t))
+              '(:width "1pt" :preamble "\\usepackage{x}"
+                :master-preamble "\\documentclass{book}\n\\usepackage{tikz}\n"
+                :master-setup "\\grechangestaffsize{15}"))))
+    (should-not (string-match-p "{article}" tex))
+    (should (string-match-p
+             "{preview}\n\\\\documentclass{book}\n\\\\usepackage{tikz}" tex))
+    ;; The master preamble comes before the local preamble.
+    (should (< (string-match "tikz" tex) (string-match "{x}" tex)))
+    ;; Setup commands of the master body come right after \begin{document}.
+    (should (string-match-p
+             "\\\\begin{document}\n\\\\grechangestaffsize{15}\n\\\\setlength"
+             tex))))
+
 (ert-deftest gregorio-preview-test-latex-document-without-color ()
   (should-not (string-match-p
                "\\\\color\\["
                (gregorio-preview--latex-document
                 '(("chunk-1.gtex" . t)) '(:width "1pt" :preamble "")))))
+
+;;; LaTeX log
+
+(defconst gregorio-preview-test-log
+  "This is LuaHBTeX
+./preview.tex:3: Preview: Snippet 1 started.
+./preview.tex:3: Preview: Snippet 1 ended.(1+2x3).
+./preview.tex:4: Preview: Snippet 2 started.
+./chunk-2.gtex:18: Undefined control sequence.
+\\gre@nextmiddlesyllablepart ->\\tikzmarknode 
+                                            {x}{B}
+l.18 }
+./chunk-2.gtex:26: Undefined control sequence.
+\\gre@middlesyllablepart ->\\tikzmarknode 
+                                        {x}{B}
+./chunk-2.gtex:30: Missing $ inserted.
+./preview.tex:4: Preview: Snippet 2 ended.(1+2x3).
+./preview.tex:5: Preview: Snippet 3 started.
+./preview.tex:5: Preview: Snippet 3 ended.(1+2x3).
+Output written on preview.pdf (3 pages, 1234 bytes).
+"
+  "Excerpt of a LaTeX log with an error in the second snippet.")
+
+(ert-deftest gregorio-preview-test-parse-log ()
+  (let ((parsed (gregorio-preview--parse-log gregorio-preview-test-log)))
+    (should (= (plist-get parsed :pages) 3))
+    (should-not (plist-get parsed :global))
+    (should-not (gregorio-preview--snippet-error parsed 1))
+    (should (equal (gregorio-preview--snippet-error parsed 2)
+                   "Undefined control sequence \\tikzmarknode; Missing $ inserted."))
+    (should-not (gregorio-preview--snippet-error parsed 3))
+    ;; A snippet that never started.
+    (should (equal (gregorio-preview--snippet-error parsed 4)
+                   "LaTeX stopped before this line"))))
+
+(ert-deftest gregorio-preview-test-parse-log-fatal ()
+  (let ((parsed (gregorio-preview--parse-log
+                 "! LaTeX Error: File `nothere.sty' not found.
+! Emergency stop.
+No pages of output.
+")))
+    (should (= (plist-get parsed :pages) 0))
+    (should (equal (gregorio-preview--snippet-error parsed 1)
+                   "LaTeX Error: File `nothere.sty' not found.; Emergency stop."))))
+
+;;; Master document
+
+(defmacro gregorio-preview-test-with-project (&rest body)
+  "Run BODY in a temporary project with a master document.
+The variable `dir' is bound to the project directory; the project has
+main.tex, which includes scores/hymn.gabc, and an unrelated other.tex."
+  (declare (indent 0))
+  `(let ((dir (file-name-as-directory (make-temp-file "gregorio-test-" t))))
+     (unwind-protect
+         (progn
+           (make-directory (expand-file-name "scores" dir))
+           (with-temp-file (expand-file-name "other.tex" dir)
+             (insert "\\documentclass{article}\n\\begin{document}\n"
+                     "\\gregorioscore{scores/other}\n\\end{document}\n"))
+           (with-temp-file (expand-file-name "main.tex" dir)
+             (insert "\\documentclass{book}\n"
+                     "% \\begin{document} in a comment\n"
+                     "\\usepackage{tikz}\n\\usetikzlibrary{tikzmark}\n"
+                     "\\usepackage{gregoriotex}\n"
+                     "\\begin{document}\n"
+                     "\\grechangestaffsize{15}\n"
+                     "% \\gresetlinecolor{red}\n"
+                     "\\gresetinitiallines{1}\n"
+                     "\\grechangestyle{initial}{\\fontsize{40}{40}%\n"
+                     "  \\selectfont}\n"
+                     "% \\gregorioscore{scores/hymn}\n"
+                     "\\gregorioscore[a]{scores/hymn}\n"
+                     "\\grechangedim{spaceabovelines}{1cm}{scalable}\n"
+                     "\\end{document}\n"))
+           (with-temp-file (expand-file-name "scores/hymn.gabc" dir)
+             (insert "name: Hymn;\n%%\n(c4) A(f) <v>\\tikzmarknode{x}{B}</v>(g) (::)\n"))
+           ,@body)
+       (delete-directory dir t))))
+
+(ert-deftest gregorio-preview-test-find-master ()
+  (gregorio-preview-test-with-project
+    (should (equal (gregorio-preview--find-master
+                    (expand-file-name "scores/hymn.gabc" dir))
+                   (expand-file-name "main.tex" dir)))
+    (should-not (gregorio-preview--find-master
+                 (expand-file-name "scores/unknown.gabc" dir)))
+    (let ((gregorio-preview-master-search-depth 0))
+      (should-not (gregorio-preview--find-master
+                   (expand-file-name "scores/hymn.gabc" dir))))))
+
+(ert-deftest gregorio-preview-test-master-file-option ()
+  (gregorio-preview-test-with-project
+    (let ((buffer-file-name (expand-file-name "scores/hymn.gabc" dir))
+          (default-directory (expand-file-name "scores/" dir)))
+      (let ((gregorio-preview-master nil))
+        (should (equal (gregorio-preview--master-file)
+                       (expand-file-name "main.tex" dir))))
+      (let ((gregorio-preview-master 'none))
+        (should-not (gregorio-preview--master-file)))
+      (let ((gregorio-preview-master "../other.tex"))
+        (should (equal (gregorio-preview--master-file)
+                       (expand-file-name "other.tex" dir))))
+      (let ((gregorio-preview-master "missing.tex"))
+        (should-error (gregorio-preview--master-file) :type 'user-error)))))
+
+(ert-deftest gregorio-preview-test-master-preamble ()
+  (gregorio-preview-test-with-project
+    (let ((preamble (gregorio-preview--master-preamble
+                     (expand-file-name "main.tex" dir) "hymn")))
+      (should (equal (car preamble)
+                     (concat "\\documentclass{book}\n"
+                             "% \\begin{document} in a comment\n"
+                             "\\usepackage{tikz}\n\\usetikzlibrary{tikzmark}\n"
+                             "\\usepackage{gregoriotex}\n")))
+      ;; Setup commands before the score, with multi-line arguments;
+      ;; comments, \gresetinitiallines and later commands are left out.
+      (should (equal (cdr preamble)
+                     (concat "\\grechangestaffsize{15}\n"
+                             "\\grechangestyle{initial}{\\fontsize{40}{40}%\n"
+                             "  \\selectfont}"))))
+    ;; Without a reference to the score, the whole body is searched.
+    (should (string-suffix-p
+             "\\grechangedim{spaceabovelines}{1cm}{scalable}"
+             (cdr (gregorio-preview--master-preamble
+                   (expand-file-name "main.tex" dir) "unknown"))))))
+
+(ert-deftest gregorio-preview-test-texinputs ()
+  (gregorio-preview-test-with-project
+    (let ((buffer-file-name (expand-file-name "scores/hymn.gabc" dir))
+          (process-environment (cons "TEXINPUTS=/x:" process-environment)))
+      (should (equal (gregorio-preview--texinputs
+                      (list :master (expand-file-name "main.tex" dir)))
+                     (list (concat "TEXINPUTS="
+                                   (directory-file-name dir) path-separator
+                                   (expand-file-name "scores" dir) path-separator
+                                   "/x:")))))
+    (let ((buffer-file-name nil))
+      (should-not (gregorio-preview--texinputs nil)))))
+
+(ert-deftest gregorio-preview-test-add-local-preamble ()
+  (gregorio-preview-test-with-buffer gregorio-preview-test-text
+    (gregorio-preview-add-local-preamble "\\usepackage{tikz}")
+    (should (equal gregorio-preview-preamble "\\usepackage{tikz}"))
+    (should (string-match-p
+             "^% Local Variables:\n% gregorio-preview-preamble: \"\\\\\\\\usepackage{tikz}\"\n% End:"
+             (buffer-string)))
+    ;; The Local Variables block is not previewed.
+    (should (= (length (gregorio-preview--chunks)) 4))))
 
 (ert-deftest gregorio-preview-test-key ()
   (let ((settings '(:dpi 100 :width "300pt")))
@@ -236,6 +404,53 @@ ple(g)na.(f) (::)
                                 (lambda (a b) (< (overlay-start a)
                                                  (overlay-start b)))))))
       (should (equal states '(shown error))))))
+
+(defconst gregorio-preview-test-tikz-text
+  "%%\n(c4) A(f) (,)\nB(g) <v>\\tikzmarknode{x}{C}</v>(h) (;)\nD(g) (::)\n"
+  "Chant whose second line needs the tikzmark library.")
+
+(defun gregorio-preview-test-states ()
+  "Return the states of the previews in the buffer, in order."
+  (mapcar (lambda (ov) (overlay-get ov 'gregorio-preview))
+          (sort (gregorio-preview--overlays (point-min) (point-max))
+                (lambda (a b) (< (overlay-start a) (overlay-start b))))))
+
+(ert-deftest gregorio-preview-test-integration-latex-error-isolated ()
+  (skip-unless (gregorio-preview-test-toolchain-p))
+  (gregorio-preview-test-with-buffer gregorio-preview-test-tikz-text
+    (gregorio-preview-buffer)
+    (gregorio-preview-test-wait)
+    (should (equal (gregorio-preview-test-states) '(shown error shown)))
+    (search-forward "tikzmarknode")
+    (should (string-match-p
+             "Undefined control sequence \\\\tikzmarknode"
+             (overlay-get (gregorio-preview--overlay-at (point))
+                          'gregorio-preview-error)))))
+
+(ert-deftest gregorio-preview-test-integration-preamble ()
+  (skip-unless (gregorio-preview-test-toolchain-p))
+  (gregorio-preview-test-with-buffer gregorio-preview-test-tikz-text
+    (setq-local gregorio-preview-preamble
+                "\\usepackage{tikz}\\usetikzlibrary{tikzmark}")
+    (setq-local gregorio-preview-latex-passes 2)
+    (gregorio-preview-buffer)
+    (gregorio-preview-test-wait)
+    (should (equal (gregorio-preview-test-states) '(shown shown shown)))))
+
+(ert-deftest gregorio-preview-test-integration-master ()
+  (skip-unless (gregorio-preview-test-toolchain-p))
+  (gregorio-preview-test-with-project
+    (let ((gregorio-lsp-client nil)
+          (enable-local-variables nil))
+      (with-current-buffer (find-file-noselect
+                            (expand-file-name "scores/hymn.gabc" dir))
+        (unwind-protect
+            (progn
+              (gregorio-preview-buffer)
+              (gregorio-preview-test-wait)
+              (should (equal (gregorio-preview-test-states) '(shown))))
+          (set-buffer-modified-p nil)
+          (kill-buffer))))))
 
 (provide 'gregorio-preview-test)
 

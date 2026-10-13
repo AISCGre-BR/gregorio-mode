@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   source text. Previews can be toggled, are revealed when point enters them,
   are removed on edit and are only regenerated when the line changes. Bound
   to `C-c C-p` and listed in the Gregorio menu.
+- Previews reuse the preamble and GregorioTeX setup of the LaTeX master
+  document that includes the score, found automatically or set with
+  `gregorio-preview-master`; `TEXINPUTS` covers its directory.
+- `gregorio-preview-preamble` can be set per file;
+  `gregorio-preview-add-local-preamble` writes it as a file-local variable.
+- LaTeX errors are reported on the line that caused them (for example
+  `Undefined control sequence \tikzmarknode`) without discarding the other
+  previews; `gregorio-preview-explain-error` (`C-c C-p C-e`) explains them.
+- `gregorio-preview-latex-passes` for packages that need two LuaLaTeX runs.
 
 ## [0.1.0] - 2026-10-13
 

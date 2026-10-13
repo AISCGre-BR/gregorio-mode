@@ -22,6 +22,13 @@
 ;; the preview package.  Every page of the resulting PDF is converted to
 ;; an image with `pdftocairo'.  All of this runs asynchronously.
 ;;
+;; Scores often use LaTeX code from packages loaded by the document that
+;; includes them.  The preview document therefore reuses the preamble
+;; of that master document, found automatically or set with
+;; `gregorio-preview-master', plus `gregorio-preview-preamble', which can
+;; also be set as a file-local variable.  LaTeX errors are reported on
+;; the line that caused them, without discarding the other previews.
+;;
 ;; Requirements: gregorio, LuaLaTeX with GregorioTeX and preview.sty
 ;; (both part of TeX Live), and pdftocairo (poppler).
 ;;
@@ -33,6 +40,7 @@
 ;;   C-c C-p C-c C-p  clear the preview at point
 ;;   C-c C-p C-c C-r  clear previews in the region
 ;;   C-c C-p C-c C-b  clear all previews in the buffer
+;;   C-c C-p C-e      explain the preview error at point
 ;;   C-c C-p C-k      abort the running preview job
 
 ;;; Code:
@@ -40,6 +48,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'gregorio-mode)
+(require 'project)
 
 (defgroup gregorio-preview nil
   "Inline score previews for `gregorio-mode'."
@@ -55,7 +64,7 @@
   :type 'string)
 
 (defcustom gregorio-preview-latex-args
-  '("-interaction=nonstopmode" "-halt-on-error" "-file-line-error")
+  '("-interaction=nonstopmode" "-file-line-error")
   "Arguments passed to `gregorio-preview-latex-command'.
 The name of the generated TeX file is appended to them."
   :type '(repeat string))
@@ -64,10 +73,43 @@ The name of the generated TeX file is appended to them."
   "Executable of pdftocairo (poppler), used to convert PDF pages to images."
   :type 'string)
 
+(defcustom gregorio-preview-latex-passes 1
+  "Number of LuaLaTeX runs for each preview job.
+Use 2 for packages that need a second run to place their elements,
+such as tikzmark with `remember picture'."
+  :type 'natnum
+  :safe (lambda (v) (and (natnump v) (<= 1 v 3))))
+
+(defcustom gregorio-preview-master nil
+  "LaTeX master document whose preamble is used by the previews.
+nil looks for a .tex file that includes the score with
+`\\gregorioscore' (see `gregorio-preview-master-search-depth'); `none'
+uses no master document; a file name uses that document.  A relative
+file name is relative to the directory of the GABC file.
+
+This is usually set as a file-local or directory-local variable."
+  :type '(choice (const :tag "Find automatically" nil)
+                 (const :tag "No master document" none)
+                 (file :tag "Master document"))
+  :safe (lambda (v) (memq v '(nil none))))
+
+(defcustom gregorio-preview-master-search-depth 3
+  "How many parent directories to search for a master document.
+The search starts in the directory of the GABC file and never goes
+above the root of its project."
+  :type 'natnum)
+
 (defcustom gregorio-preview-preamble ""
   "Extra LaTeX code inserted in the preamble of the preview document.
-Use it to change fonts or GregorioTeX settings, for example
-\"\\\\grechangestaffsize{15}\" or \"\\\\gresetnabcfont{gregall}{}\"."
+It comes after the preamble of the master document, if any.  Use it
+to load packages needed by LaTeX code inside the score, or to change
+fonts or GregorioTeX settings, for example
+\"\\\\usepackage{tikz}\\\\usetikzlibrary{tikzmark}\" or
+\"\\\\grechangestaffsize{15}\".
+
+It can be set per file with `gregorio-preview-add-local-preamble'.
+Since LuaLaTeX can run Lua code, Emacs asks before applying a
+file-local value."
   :type 'string)
 
 (defcustom gregorio-preview-scale 1.0
@@ -198,6 +240,145 @@ body keeps the initial and the annotation."
         (nreverse chunks)))))
 
 ;;; ---------------------------------------------------------------------------
+;;; Master document
+;;; ---------------------------------------------------------------------------
+
+(defvar gregorio-preview--tex-syntax-table
+  (let ((table (make-syntax-table)))
+    (modify-syntax-entry ?\\ "\\" table)
+    (modify-syntax-entry ?% "<" table)
+    (modify-syntax-entry ?\n ">" table)
+    (modify-syntax-entry ?{ "(}" table)
+    (modify-syntax-entry ?} "){" table)
+    (modify-syntax-entry ?\[ "(]" table)
+    (modify-syntax-entry ?\] ")[" table)
+    (modify-syntax-entry ?\( "." table)
+    (modify-syntax-entry ?\) "." table)
+    (modify-syntax-entry ?\" "." table)
+    table)
+  "Syntax table used to scan LaTeX documents.")
+
+(defconst gregorio-preview--score-regexp
+  "\\\\\\(?:gregorioscore\\|includescore\\)\\*?[ \t\n]*\\(?:\\[[^]]*\\][ \t\n]*\\)?{\\([^}]*\\)}"
+  "Regexp matching a GregorioTeX command that includes a score file.")
+
+(defconst gregorio-preview--setup-regexp
+  "\\\\gre\\(?:set\\|change\\)[A-Za-z]+"
+  "Regexp matching GregorioTeX setup commands.")
+
+(defun gregorio-preview--in-comment-p ()
+  "Return non-nil if point is inside a LaTeX comment."
+  (nth 4 (syntax-ppss)))
+
+(defun gregorio-preview--score-reference (name)
+  "Return the position of the first score inclusion of NAME, or nil.
+NAME is the base name of a GABC file, without directory and extension.
+The current buffer holds a LaTeX document."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search nil) found)
+      (while (and (not found)
+                  (re-search-forward gregorio-preview--score-regexp nil t))
+        (when (and (not (save-excursion
+                          (goto-char (match-beginning 0))
+                          (gregorio-preview--in-comment-p)))
+                   (equal (file-name-base (string-trim (match-string 1)))
+                          name))
+          (setq found (match-beginning 0))))
+      found)))
+
+(defmacro gregorio-preview--with-tex-file (file &rest body)
+  "Run BODY in a temporary buffer holding the LaTeX document FILE."
+  (declare (indent 1))
+  `(with-temp-buffer
+     (insert-file-contents ,file)
+     (set-syntax-table gregorio-preview--tex-syntax-table)
+     ,@body))
+
+(defun gregorio-preview--search-directories (file)
+  "Return the directories searched for the master document of FILE."
+  (let* ((dir (file-name-directory (expand-file-name file)))
+         (project (project-current nil dir))
+         (root (and project (expand-file-name (project-root project))))
+         dirs)
+    (dotimes (_ (1+ gregorio-preview-master-search-depth))
+      (when dir
+        (push dir dirs)
+        (let ((parent (file-name-directory (directory-file-name dir))))
+          (setq dir (and (not (and root (file-equal-p dir root)))
+                         (not (equal parent dir))
+                         parent)))))
+    (nreverse dirs)))
+
+(defun gregorio-preview--find-master (file)
+  "Return a LaTeX document that includes the GABC FILE, or nil."
+  (let ((name (file-name-base file)))
+    (cl-loop for dir in (gregorio-preview--search-directories file)
+             thereis (cl-loop
+                      for tex in (directory-files dir t "\\.tex\\'" t)
+                      thereis (and (file-regular-p tex)
+                                   (file-readable-p tex)
+                                   (gregorio-preview--with-tex-file tex
+                                     (gregorio-preview--score-reference name))
+                                   tex)))))
+
+(defun gregorio-preview--master-file ()
+  "Return the master document of the current buffer, or nil."
+  (pcase gregorio-preview-master
+    ('none nil)
+    ((and (pred stringp) master)
+     (let ((file (expand-file-name master)))
+       (unless (file-readable-p file)
+         (user-error "Master document %s not found" master))
+       file))
+    (_ (and buffer-file-name
+            (gregorio-preview--find-master buffer-file-name)))))
+
+(defun gregorio-preview--command-at-point ()
+  "Return the LaTeX command at point with its arguments, as a string.
+Point is at the backslash of the command and is moved after it."
+  (let ((start (point)))
+    (skip-chars-forward "\\\\")
+    (skip-chars-forward "A-Za-z@")
+    (while (save-excursion
+             (skip-chars-forward " \t")
+             (memq (char-after) '(?{ ?\[)))
+      (skip-chars-forward " \t")
+      (forward-sexp 1))
+    (buffer-substring-no-properties start (point))))
+
+(defun gregorio-preview--master-preamble (file name)
+  "Return the preamble of the LaTeX document FILE as (PREAMBLE . SETUP).
+PREAMBLE is the text before \\begin{document}.  SETUP holds the
+GregorioTeX setup commands of the document body that come before the
+inclusion of the score NAME (or anywhere in the body if NAME is not
+included), except \\gresetinitiallines.  Return nil when FILE has no
+\\begin{document}."
+  (gregorio-preview--with-tex-file file
+    (goto-char (point-min))
+    (let ((case-fold-search nil) begin)
+      (while (and (not begin)
+                  (search-forward "\\begin{document}" nil t))
+        (unless (save-excursion (goto-char (match-beginning 0))
+                                (gregorio-preview--in-comment-p))
+          (setq begin (match-beginning 0))))
+      (when begin
+        (let ((preamble (buffer-substring-no-properties (point-min) begin))
+              (limit (or (gregorio-preview--score-reference name) (point-max)))
+              setup)
+          (goto-char begin)
+          (while (re-search-forward gregorio-preview--setup-regexp limit t)
+            (goto-char (match-beginning 0))
+            (if (or (gregorio-preview--in-comment-p)
+                    (looking-at-p "\\\\gresetinitiallines\\b"))
+                (goto-char (match-end 0))
+              (push (condition-case nil
+                        (gregorio-preview--command-at-point)
+                      (scan-error (goto-char (match-end 0)) nil))
+                    setup)))
+          (cons preamble (string-join (delq nil (nreverse setup)) "\n")))))))
+
+;;; ---------------------------------------------------------------------------
 ;;; Rendering parameters
 ;;; ---------------------------------------------------------------------------
 
@@ -227,11 +408,18 @@ body keeps the initial and the annotation."
 
 (defun gregorio-preview--settings ()
   "Return the rendering settings for the current buffer as a plist."
-  (let ((dpi (gregorio-preview--dpi)))
+  (let* ((dpi (gregorio-preview--dpi))
+         (master (gregorio-preview--master-file))
+         (name (and buffer-file-name (file-name-base buffer-file-name)))
+         (preamble (and master (gregorio-preview--master-preamble master name))))
     (list :dpi dpi
           :width (gregorio-preview--text-width dpi)
           :color (gregorio-preview--color)
           :type gregorio-preview-image-type
+          :passes (max 1 gregorio-preview-latex-passes)
+          :master (and preamble master)
+          :master-preamble (car preamble)
+          :master-setup (cdr preamble)
           :preamble gregorio-preview-preamble)))
 
 (defun gregorio-preview--key (gabc settings)
@@ -241,17 +429,23 @@ body keeps the initial and the annotation."
 (defun gregorio-preview--latex-document (files settings)
   "Return the LaTeX source typesetting FILES with SETTINGS.
 FILES is a list of (GTEX-FILE . FIRST) pairs; FIRST is non-nil for the
-chunk that carries the initial of the score."
-  (let ((color (plist-get settings :color)))
+chunk that carries the initial of the score.  The preamble of the
+master document, when there is one, replaces the default document
+class."
+  (let ((color (plist-get settings :color))
+        (setup (plist-get settings :master-setup)))
     (concat
-     "\\documentclass{article}\n"
-     "\\usepackage{xcolor}\n"
+     "\\PassOptionsToPackage{active,tightpage,auctex}{preview}\n"
+     (or (plist-get settings :master-preamble)
+         "\\documentclass{article}\n")
+     "\n\\usepackage{xcolor}\n"
      "\\usepackage{gregoriotex}\n"
-     "\\usepackage[active,tightpage]{preview}\n"
-     "\\pagestyle{empty}\n"
-     (format "\\setlength{\\textwidth}{%s}\n" (plist-get settings :width))
+     "\\usepackage{preview}\n"
      (plist-get settings :preamble) "\n"
      "\\begin{document}\n"
+     (if (and setup (not (string-empty-p setup))) (concat setup "\n") "")
+     (format "\\setlength{\\textwidth}{%s}\n" (plist-get settings :width))
+     "\\setlength{\\linewidth}{\\textwidth}\\setlength{\\hsize}{\\textwidth}\n"
      (if color (format "\\color[HTML]{%s}\n" color) "")
      (mapconcat
       (lambda (file)
@@ -259,6 +453,69 @@ chunk that carries the initial of the score."
                 (if (cdr file) 1 0) (car file)))
       files "")
      "\\end{document}\n")))
+
+;;; ---------------------------------------------------------------------------
+;;; LaTeX log
+;;; ---------------------------------------------------------------------------
+
+(defconst gregorio-preview--error-regexp
+  "^\\(?:! \\|[^ \n]*:[0-9]+: \\)\\(.+\\)$"
+  "Regexp matching a LaTeX error line, in either error format.")
+
+(defun gregorio-preview--error-message (lines i)
+  "Return the error message of line I of the log LINES (a vector)."
+  (let ((message (match-string 1 (aref lines i))))
+    (if (and (string-prefix-p "Undefined control sequence" message)
+             (< (1+ i) (length lines))
+             (string-match "\\(\\\\\\(?:[A-Za-z@]+\\|.\\)\\)[ \t]*$"
+                           (aref lines (1+ i))))
+        (format "Undefined control sequence %s"
+                (match-string 1 (aref lines (1+ i))))
+      message)))
+
+(defun gregorio-preview--parse-log (log)
+  "Parse the LaTeX LOG of a preview run.
+Return a plist with :pages, the number of pages written (0 when
+none), :global, the errors raised outside snippets, and :snippets, an
+alist mapping each snippet number to a plist with :ended and :errors.
+Error lists keep the order of the log, without duplicates."
+  (let ((lines (vconcat (split-string log "\n")))
+        (pages 0) global snippets current)
+    (dotimes (i (length lines))
+      (let ((line (aref lines i)))
+        (cond
+         ((string-match "Preview: Snippet \\([0-9]+\\) started" line)
+          (setq current (string-to-number (match-string 1 line)))
+          (push (list current :ended nil :errors nil) snippets))
+         ((string-match "Preview: Snippet \\([0-9]+\\) ended" line)
+          (let ((entry (assq (string-to-number (match-string 1 line))
+                             snippets)))
+            (when entry (setf (plist-get (cdr entry) :ended) t)))
+          (setq current nil))
+         ((string-match "Output written on .*(\\([0-9]+\\) pages?" line)
+          (setq pages (string-to-number (match-string 1 line))))
+         ((and (string-match gregorio-preview--error-regexp line)
+               (not (string-match-p "Preview: " line)))
+          (let ((message (gregorio-preview--error-message lines i))
+                (entry (and current (assq current snippets))))
+            (if entry
+                (unless (member message (plist-get (cdr entry) :errors))
+                  (setf (plist-get (cdr entry) :errors)
+                        (append (plist-get (cdr entry) :errors)
+                                (list message))))
+              (unless (member message global)
+                (setq global (append global (list message))))))))))
+    (list :pages pages :global global :snippets (nreverse snippets))))
+
+(defun gregorio-preview--snippet-error (parsed index)
+  "Return the error of snippet INDEX in the PARSED log, or nil if it worked."
+  (let* ((entry (cdr (assq index (plist-get parsed :snippets))))
+         (errors (append (plist-get parsed :global)
+                         (plist-get entry :errors))))
+    (cond
+     (errors (string-join errors "; "))
+     ((not (plist-get entry :ended)) "LaTeX stopped before this line")
+     ((> index (plist-get parsed :pages)) "LaTeX produced no page"))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Overlays
@@ -270,6 +527,12 @@ chunk that carries the initial of the score."
   "<mouse-2>" #'gregorio-preview-toggle
   "<down-mouse-1>" #'ignore
   "<mouse-1>" #'gregorio-preview-toggle)
+
+(defvar-keymap gregorio-preview-error-map
+  :doc "Keymap active on the indicator of a failed preview."
+  "<down-mouse-1>" #'ignore
+  "<mouse-1>" #'gregorio-preview-explain-error
+  "<mouse-2>" #'gregorio-preview-explain-error)
 
 (defun gregorio-preview--overlays (beg end)
   "Return the preview overlays overlapping BEG..END."
@@ -303,10 +566,14 @@ image for `shown' and the error message for `error'."
      (overlay-put ov 'mouse-face 'highlight)
      (overlay-put ov 'help-echo "mouse-1, RET: show source"))
     ('error
-     (overlay-put ov 'before-string
-                  (propertize "⚠ " 'face 'gregorio-preview-error-face
-                              'help-echo data))
-     (overlay-put ov 'help-echo data))))
+     (overlay-put ov 'gregorio-preview-error data)
+     (let ((echo (concat data "\nmouse-1, C-c C-p C-e: explain")))
+       (overlay-put ov 'before-string
+                    (propertize "⚠ " 'face 'gregorio-preview-error-face
+                                'mouse-face 'highlight
+                                'keymap gregorio-preview-error-map
+                                'help-echo echo))
+       (overlay-put ov 'help-echo echo)))))
 
 (defun gregorio-preview--modified (ov after &rest _)
   "Remove preview overlay OV when its text is modified.
@@ -351,7 +618,7 @@ This is a `cursor-sensor-functions' handler."
 (cl-defstruct (gregorio-preview--job (:constructor gregorio-preview--job-create)
                                      (:copier nil))
   "A running preview job."
-  buffer dir settings chunks process)
+  buffer dir settings chunks process env)
 
 (defvar-local gregorio-preview--current-job nil
   "The preview job running in this buffer, or nil.")
@@ -387,7 +654,9 @@ This is a `cursor-sensor-functions' handler."
 CALLBACK is called with the exit status when PROGRAM finishes and JOB
 is still current."
   (let ((default-directory (file-name-as-directory
-                            (gregorio-preview--job-dir job))))
+                            (gregorio-preview--job-dir job)))
+        (process-environment (append (gregorio-preview--job-env job)
+                                     process-environment)))
     (gregorio-preview--log "$ %s %s\n" program (string-join args " "))
     (setf (gregorio-preview--job-process job)
           (make-process
@@ -427,9 +696,7 @@ exit status of PROGRAM."
 (defun gregorio-preview--fail (job ov message)
   "Mark preview overlay OV of JOB as failed with MESSAGE."
   (when (overlay-buffer ov)
-    (gregorio-preview--set-state
-     ov 'error
-     (format "%s (see the %s buffer)" message gregorio-preview--log-buffer)))
+    (gregorio-preview--set-state ov 'error message))
   (setf (gregorio-preview--job-chunks job)
         (delq (assq ov (gregorio-preview--job-chunks job))
               (gregorio-preview--job-chunks job))))
@@ -477,21 +744,23 @@ exit status of PROGRAM."
                                (decode-coding-string msg 'utf-8))))))))))
    (gregorio-preview--job-chunks job)))
 
-(defun gregorio-preview--image-steps (job)
-  "Return the steps converting the PDF pages of JOB to images."
+(defun gregorio-preview--image-steps (job pages)
+  "Return the steps converting PAGES of the PDF of JOB to images.
+PAGES is the list of page numbers to convert."
   (let ((dpi (number-to-string (plist-get (gregorio-preview--job-settings job)
                                           :dpi)))
         (ignore-status #'ignore))
     (if (eq (plist-get (gregorio-preview--job-settings job) :type) 'svg)
-        (cl-loop for i from 1 to (length (gregorio-preview--job-chunks job))
+        (cl-loop for i in pages
                  collect (list gregorio-preview-pdftocairo-command
                                (list "-svg" "-f" (number-to-string i)
                                      "-l" (number-to-string i)
                                      "preview.pdf" (format "page-%d.svg" i))
                                ignore-status))
-      (list (list gregorio-preview-pdftocairo-command
-                  (list "-png" "-transp" "-r" dpi "preview.pdf" "page")
-                  ignore-status)))))
+      (and pages
+           (list (list gregorio-preview-pdftocairo-command
+                       (list "-png" "-transp" "-r" dpi "preview.pdf" "page")
+                       ignore-status))))))
 
 (defun gregorio-preview--page-file (job index count)
   "Return the image file of page INDEX (1-based) of COUNT pages in JOB."
@@ -504,33 +773,33 @@ exit status of PROGRAM."
                index)
        dir))))
 
-(defun gregorio-preview--pdf-pages (file)
-  "Return the number of pages of the PDF typeset in FILE's log, or nil."
-  (let ((log (gregorio-preview--read-file file)))
-    (when (and log (string-match
-                    "Output written on .*(\\([0-9]+\\) pages?" log))
-      (string-to-number (match-string 1 log)))))
+(defun gregorio-preview--install-images (job pages count)
+  "Show the images of PAGES produced by JOB on its overlays.
+PAGES is an alist mapping page numbers to chunks; COUNT is the number
+of pages of the PDF."
+  (let ((type (plist-get (gregorio-preview--job-settings job) :type)))
+    (pcase-dolist (`(,page . ,chunk) pages)
+      (let ((ov (car chunk))
+            (data (gregorio-preview--read-file
+                   (gregorio-preview--page-file job page count))))
+        (when (overlay-buffer ov)
+          (if data
+              (gregorio-preview--set-state
+               ov 'shown (create-image data type t :ascent 'center))
+            (gregorio-preview--fail job ov "No image produced")))))))
 
-(defun gregorio-preview--install-images (job)
-  "Show the images produced by JOB on its overlays."
-  (let* ((chunks (gregorio-preview--job-chunks job))
-         (count (length chunks))
-         (type (plist-get (gregorio-preview--job-settings job) :type)))
-    (cl-loop
-     for chunk in chunks
-     for i from 1
-     do (let* ((ov (car chunk))
-               (data (gregorio-preview--read-file
-                      (gregorio-preview--page-file job i count))))
-          (when (overlay-buffer ov)
-            (if data
-                (gregorio-preview--set-state
-                 ov 'shown
-                 (create-image data type t :ascent 'center))
-              (gregorio-preview--fail job ov "No image produced")))))))
+(defun gregorio-preview--latex-steps (job)
+  "Return the LuaLaTeX steps of JOB."
+  (make-list (plist-get (gregorio-preview--job-settings job) :passes)
+             (list gregorio-preview-latex-command
+                   (append gregorio-preview-latex-args '("preview.tex"))
+                   #'ignore)))
 
 (defun gregorio-preview--typeset (job)
-  "Typeset the compiled chunks of JOB and install the resulting images."
+  "Typeset the compiled chunks of JOB and install the resulting images.
+Each chunk is a snippet of the preview document; chunks whose snippet
+raised a LaTeX error are marked as failed, the others get the image
+of their page."
   (let ((chunks (gregorio-preview--job-chunks job))
         (dir (gregorio-preview--job-dir job)))
     (if (null chunks)
@@ -541,28 +810,50 @@ exit status of PROGRAM."
                            (cons (concat (nth 1 chunk) ".gtex") (nth 2 chunk)))
                          chunks)
                  (gregorio-preview--job-settings job))))
-      (gregorio-preview--run
-       job gregorio-preview-latex-command
-       (append gregorio-preview-latex-args '("preview.tex"))
-       (lambda (_status)
-         (let ((pages (gregorio-preview--pdf-pages
-                       (expand-file-name "preview.log" dir))))
-           (if (not (eql pages (length chunks)))
-               (progn
-                 (gregorio-preview--log "%s\n" (or (gregorio-preview--read-file
-                                                    (expand-file-name
-                                                     "preview.log" dir))
-                                                   ""))
-                 (dolist (chunk (copy-sequence
-                                 (gregorio-preview--job-chunks job)))
-                   (gregorio-preview--fail job (car chunk)
-                                           "LaTeX failed"))
-                 (gregorio-preview--finish job))
-             (gregorio-preview--run-sequence
-              job (gregorio-preview--image-steps job)
-              (lambda ()
-                (gregorio-preview--install-images job)
-                (gregorio-preview--finish job))))))))))
+      (gregorio-preview--run-sequence
+       job (gregorio-preview--latex-steps job)
+       (lambda ()
+         (let* ((log (decode-coding-string
+                      (or (gregorio-preview--read-file
+                           (expand-file-name "preview.log" dir))
+                          "")
+                      'utf-8))
+                (parsed (gregorio-preview--parse-log log))
+                pages)
+           (cl-loop for chunk in chunks
+                    for i from 1
+                    do (let ((error (gregorio-preview--snippet-error parsed i)))
+                         (if error
+                             (gregorio-preview--fail job (car chunk) error)
+                           (push (cons i chunk) pages))))
+           (setq pages (nreverse pages))
+           (when (or (plist-get parsed :global)
+                     (< (length pages) (length chunks)))
+             (gregorio-preview--log "\n%s\n" log))
+           (gregorio-preview--run-sequence
+            job (gregorio-preview--image-steps job (mapcar #'car pages))
+            (lambda ()
+              (gregorio-preview--install-images job pages
+                                                (plist-get parsed :pages))
+              (gregorio-preview--finish job)))))))))
+
+(defun gregorio-preview--texinputs (settings)
+  "Return the TEXINPUTS environment entry for SETTINGS, or nil.
+The directories of the master document and of the GABC file come
+first, so that relative \\input and \\usepackage calls work."
+  (let ((dirs (delete-dups
+               (delq nil
+                     (list (let ((master (plist-get settings :master)))
+                             (and master (file-name-directory master)))
+                           (and buffer-file-name
+                                (file-name-directory buffer-file-name)))))))
+    (when dirs
+      (list (concat "TEXINPUTS="
+                    (mapconcat (lambda (dir)
+                                 (directory-file-name (expand-file-name dir)))
+                               dirs path-separator)
+                    path-separator
+                    (or (getenv "TEXINPUTS") ""))))))
 
 (defun gregorio-preview--start (beg end)
   "Generate previews for the body lines between BEG and END."
@@ -570,8 +861,9 @@ exit status of PROGRAM."
   (gregorio-preview-abort)
   (let* ((settings (gregorio-preview--settings))
          (dir (make-temp-file "gregorio-preview-" t))
-         (job (gregorio-preview--job-create :buffer (current-buffer)
-                                            :dir dir :settings settings))
+         (job (gregorio-preview--job-create
+               :buffer (current-buffer) :dir dir :settings settings
+               :env (gregorio-preview--texinputs settings)))
          (n 0)
          chunks)
     (dolist (chunk (gregorio-preview--chunks beg end))
@@ -603,7 +895,13 @@ exit status of PROGRAM."
       (setf (gregorio-preview--job-chunks job) (nreverse chunks))
       (setq gregorio-preview--current-job job)
       (add-hook 'kill-buffer-hook #'gregorio-preview-abort nil t)
-      (message "Generating %d preview%s..." n (if (= n 1) "" "s"))
+      (let ((master (plist-get settings :master)))
+        (gregorio-preview--log "Master document: %s\n\n"
+                               (or master "none"))
+        (message "Generating %d preview%s%s..." n (if (= n 1) "" "s")
+                 (if master
+                     (format " (preamble of %s)" (file-name-nondirectory master))
+                   "")))
       (gregorio-preview--run-sequence
        job (gregorio-preview--compile-steps job)
        (lambda () (gregorio-preview--typeset job))))))
@@ -670,6 +968,67 @@ When called from a mouse EVENT, act on the preview clicked on."
   (interactive nil gregorio-mode)
   (let ((ov (gregorio-preview--overlay-at (point))))
     (if ov (delete-overlay ov) (user-error "No preview here"))))
+
+;;;###autoload
+(defun gregorio-preview-explain-error (&optional event)
+  "Explain why the preview at point (or clicked on with EVENT) failed."
+  (interactive (list last-nonmenu-event) gregorio-mode)
+  (let* ((pos (if (mouse-event-p event)
+                  (posn-point (event-start event))
+                (point)))
+         (ov (gregorio-preview--overlay-at pos))
+         (message (and ov (overlay-get ov 'gregorio-preview-error)))
+         (source (current-buffer))
+         (master (gregorio-preview--master-file)))
+    (unless (and message (eq (overlay-get ov 'gregorio-preview) 'error))
+      (user-error "No preview error here"))
+    (with-help-window "*gregorio-preview-error*"
+      (with-current-buffer standard-output
+        (insert (propertize "Preview error" 'face 'bold) "\n\n"
+                message "\n\n")
+        (insert "Master document: "
+                (if master (abbreviate-file-name master) "none") "\n\n")
+        (when (string-match-p "Undefined control sequence" message)
+          (insert "The score uses LaTeX code from a package that the preview\n"
+                  "document does not load.  Load it in the master document,\n"
+                  "in `gregorio-preview-preamble' or in a file-local preamble.\n\n"))
+        (insert-button "Show the LaTeX log"
+                       'action (lambda (_)
+                                 (pop-to-buffer gregorio-preview--log-buffer)))
+        (insert "\n")
+        (insert-button "Add a file-local preamble"
+                       'action (lambda (_)
+                                 (pop-to-buffer source)
+                                 (call-interactively
+                                  #'gregorio-preview-add-local-preamble)))
+        (insert "\n")
+        (insert-button "Customize gregorio-preview-preamble"
+                       'action (lambda (_)
+                                 (customize-variable
+                                  'gregorio-preview-preamble)))
+        (insert "\n")
+        (if master
+            (insert-button "Open the master document"
+                           'action (lambda (_) (find-file-other-window master)))
+          (insert-button "Customize gregorio-preview-master"
+                         'action (lambda (_)
+                                   (customize-variable
+                                    'gregorio-preview-master))))
+        (insert "\n")))))
+
+;;;###autoload
+(defun gregorio-preview-add-local-preamble (preamble)
+  "Set PREAMBLE as the file-local value of `gregorio-preview-preamble'.
+The value is written in a Local Variables block at the end of the
+file and applied to the current buffer."
+  (interactive
+   (list (read-string "Preview preamble: "
+                      (if (string-empty-p gregorio-preview-preamble)
+                          "\\usepackage{}"
+                        gregorio-preview-preamble)))
+   gregorio-mode)
+  (add-file-local-variable 'gregorio-preview-preamble preamble)
+  (setq-local gregorio-preview-preamble preamble))
 
 ;;;###autoload
 (defun gregorio-preview-abort ()

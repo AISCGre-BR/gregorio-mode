@@ -880,12 +880,15 @@ that part of the body is converted.  Return the number of conversions."
 (autoload 'gregorio-preview-clearout-region "gregorio-preview" nil t)
 (autoload 'gregorio-preview-clearout-buffer "gregorio-preview" nil t)
 (autoload 'gregorio-preview-abort "gregorio-preview" nil t)
+(autoload 'gregorio-preview-explain-error "gregorio-preview" nil t)
+(autoload 'gregorio-preview-add-local-preamble "gregorio-preview" nil t)
 
 (defvar-keymap gregorio-preview-map
   :doc "Keymap for score preview commands, bound to \`C-c C-p'."
   "C-p" #'gregorio-preview-at-point
   "C-r" #'gregorio-preview-region
   "C-b" #'gregorio-preview-buffer
+  "C-e" #'gregorio-preview-explain-error
   "C-k" #'gregorio-preview-abort
   "C-c C-p" #'gregorio-preview-clearout-at-point
   "C-c C-r" #'gregorio-preview-clearout-region
@@ -932,6 +935,9 @@ that part of the body is converted.  Return the number of conversions."
      ["Clear Previews in Region" gregorio-preview-clearout-region
       :active (use-region-p)]
      ["Clear All Previews" gregorio-preview-clearout-buffer]
+     "---"
+     ["Explain Preview Error" gregorio-preview-explain-error]
+     ["Add File-Local Preamble..." gregorio-preview-add-local-preamble]
      ["Abort Preview Job" gregorio-preview-abort])
     "---"
     ["Format Buffer" gregorio-format-buffer]
