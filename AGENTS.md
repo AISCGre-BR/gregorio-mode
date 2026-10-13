@@ -25,7 +25,8 @@ It is the Emacs counterpart of `gregorio.nvim`, `vscode-gregorio` and
 gregorio-mode.el          ← major mode: faces, regex font-lock, syntax table,
                             editing commands, templates, LSP wiring, keymap
 gregorio-ts-mode.el       ← tree-sitter variant (derives from gregorio-mode)
-test/gregorio-mode-test.el← ERT tests
+gregorio-preview.el       ← inline score previews (preview-latex style)
+test/*-test.el            ← ERT tests
 templates/*.gabc          ← starter templates (gregorio-insert-template)
 snippets/gregorio-mode/   ← yasnippet snippets
 examples/*.gabc           ← sample files for manual highlighting checks
@@ -81,6 +82,24 @@ Preserve the semantics shared with the sister projects and gregorio-core:
 `gabc`) and as an lsp-mode client. `gregorio-lsp-settings` is pushed with
 `workspace/didChangeConfiguration` after connection. Do not add network
 downloads of the server binary.
+
+### 4.4 Score preview
+
+`gregorio-preview.el` is loaded on demand through the autoloads and the
+`C-c C-p` keymap in `gregorio-mode.el`.
+
+- `gregorio-preview--chunks` turns each non-blank, non-comment body line into a
+  standalone GABC document. The document repeats the header (`annotation` is
+  dropped after the first line) and prepends the clef in effect.
+- A job runs `gregorio` on each chunk, then a single LuaLaTeX run (one
+  `preview` environment per chunk, `\gregorioscore[n]{chunk-N.gtex}`), then
+  `pdftocairo`. Each step is an asynchronous process chained through
+  sentinels. Pages map to the chunks that compiled, in order.
+- Overlay states: `busy`, `shown`, `revealed`, `error`. Images are stored as
+  data on the overlay, so the temporary directory is deleted when the job
+  ends. The cache key (`gregorio-preview--key`) covers the chunk text and the
+  rendering settings.
+- The integration tests are skipped when the toolchain is not installed.
 
 ## 5. Conventions
 

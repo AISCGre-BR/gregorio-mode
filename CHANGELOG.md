@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `gregorio-preview`: inline score previews in the spirit of AUCTeX's
+  preview-latex. Each body line is engraved with gregorio, LuaLaTeX
+  (GregorioTeX) and pdftocairo, asynchronously, and the image replaces the
+  source text. Previews can be toggled, are revealed when point enters them,
+  are removed on edit and are only regenerated when the line changes. Bound
+  to `C-c C-p` and listed in the Gregorio menu.
+
 ## [0.1.0] - 2026-10-13
 
 ### Added

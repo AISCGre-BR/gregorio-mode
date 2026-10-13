@@ -28,6 +28,8 @@
 ;; - Integration with the gregorio-lsp language server through Eglot
 ;;   (or lsp-mode), including document formatting.
 ;; - Templates, header skeletons and yasnippet snippets.
+;; - Inline score previews, in the spirit of AUCTeX's preview-latex
+;;   (gregorio-preview.el).
 ;;
 ;; A tree-sitter based variant, `gregorio-ts-mode', lives in
 ;; gregorio-ts-mode.el.
@@ -869,6 +871,26 @@ that part of the body is converted.  Return the number of conversions."
 ;;; Keymap and menu
 ;;; ---------------------------------------------------------------------------
 
+;; Score previews live in gregorio-preview.el, loaded on first use.
+(autoload 'gregorio-preview-at-point "gregorio-preview" nil t)
+(autoload 'gregorio-preview-region "gregorio-preview" nil t)
+(autoload 'gregorio-preview-buffer "gregorio-preview" nil t)
+(autoload 'gregorio-preview-toggle "gregorio-preview" nil t)
+(autoload 'gregorio-preview-clearout-at-point "gregorio-preview" nil t)
+(autoload 'gregorio-preview-clearout-region "gregorio-preview" nil t)
+(autoload 'gregorio-preview-clearout-buffer "gregorio-preview" nil t)
+(autoload 'gregorio-preview-abort "gregorio-preview" nil t)
+
+(defvar-keymap gregorio-preview-map
+  :doc "Keymap for score preview commands, bound to \`C-c C-p'."
+  "C-p" #'gregorio-preview-at-point
+  "C-r" #'gregorio-preview-region
+  "C-b" #'gregorio-preview-buffer
+  "C-k" #'gregorio-preview-abort
+  "C-c C-p" #'gregorio-preview-clearout-at-point
+  "C-c C-r" #'gregorio-preview-clearout-region
+  "C-c C-b" #'gregorio-preview-clearout-buffer)
+
 (defvar-keymap gregorio-mode-map
   :doc "Keymap for `gregorio-mode'."
   "C-c C-u" #'gregorio-note-shift-up
@@ -877,7 +899,8 @@ that part of the body is converted.  Return the number of conversions."
   "C-c C-l" #'gregorio-convert-ligatures-to-tags
   "C-c C-t" #'gregorio-convert-tags-to-ligatures
   "C-c C-r" #'gregorio-format-buffer
-  "C-c C-i" #'gregorio-insert-template)
+  "C-c C-i" #'gregorio-insert-template
+  "C-c C-p" gregorio-preview-map)
 
 (defvar-keymap gregorio-shift-repeat-map
   :doc "Repeat map for shifting notes; see `repeat-mode'."
@@ -898,6 +921,18 @@ that part of the body is converted.  Return the number of conversions."
     ["Insert Template..." gregorio-insert-template]
     ["Insert Header" gregorio-insert-header]
     ["Insert NABC Header" gregorio-insert-nabc-header]
+    "---"
+    ("Preview"
+     ["Preview Line at Point" gregorio-preview-at-point]
+     ["Preview Region" gregorio-preview-region :active (use-region-p)]
+     ["Preview Buffer" gregorio-preview-buffer]
+     ["Toggle Preview at Point" gregorio-preview-toggle]
+     "---"
+     ["Clear Preview at Point" gregorio-preview-clearout-at-point]
+     ["Clear Previews in Region" gregorio-preview-clearout-region
+      :active (use-region-p)]
+     ["Clear All Previews" gregorio-preview-clearout-buffer]
+     ["Abort Preview Job" gregorio-preview-abort])
     "---"
     ["Format Buffer" gregorio-format-buffer]
     ["Restart Language Server" gregorio-restart-language-server]))

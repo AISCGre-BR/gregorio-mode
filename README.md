@@ -45,6 +45,9 @@ grammar and the [gregorio-lsp](https://github.com/AISCGre-BR/gregorio-lsp) langu
 - **Templates, skeletons and snippets** — starter templates, header skeletons
   and a [yasnippet](https://github.com/joaotavora/yasnippet) snippet collection
   ported from gregorio.nvim and vscode-gregorio.
+- **Score preview** — inline previews of the engraved score, in the spirit of
+  AUCTeX's preview-latex: each line of the chant body is replaced by its
+  rendered image.
 - **Imenu** — headers and the start of the body are listed in `imenu`.
 - **Comments** — `%` comments work with `comment-dwim` (`M-;`).
 
@@ -63,6 +66,8 @@ grammar and the [gregorio-lsp](https://github.com/AISCGre-BR/gregorio-lsp) langu
 
   Make sure `~/.cargo/bin` is on your `PATH` (or `exec-path`), or set
   `gregorio-lsp-command` to the absolute path of the binary.
+- Optional, for score previews: `gregorio`, LuaLaTeX with GregorioTeX (TeX
+  Live) and `pdftocairo` (poppler).
 
 ## Installation
 
@@ -108,6 +113,55 @@ parse errors.
 > **Note**: the pinned grammar does not yet resolve the GABC/NABC alternation
 > for `nabc-lines` values greater than 1; the regex-based `gregorio-mode` does.
 
+## Score preview
+
+Inline previews work like AUCTeX's preview-latex. `C-c C-p C-b` engraves every
+line of the chant body and shows the rendered image in place of the source text.
+Each line is typeset on its own: the buffer header is repeated (only the
+first line keeps the initial and the annotation), and the clef in effect is
+prepended when the line does not start with one.
+
+- `RET` or a click on an image shows the source again; `C-c C-p C-p` switches
+  back to the image.
+- With `gregorio-preview-auto-reveal` (the default), the source is revealed
+  when point enters a preview and hidden again when point leaves it.
+- Editing a line removes its preview. Previewing again only regenerates lines
+  that changed.
+- Lines that fail to compile are marked with ⚠; hover over the mark for the
+  message, or see the `*gregorio-preview*` buffer.
+- Previews are generated asynchronously; `C-c C-p C-k` aborts a running job.
+
+| Key | Command |
+|---|---|
+| `C-c C-p C-p` | `gregorio-preview-at-point` — preview the line at point, or toggle its preview |
+| `C-c C-p C-r` | `gregorio-preview-region` — preview the lines in the region |
+| `C-c C-p C-b` | `gregorio-preview-buffer` — preview the whole body |
+| `C-c C-p C-c C-p` | `gregorio-preview-clearout-at-point` |
+| `C-c C-p C-c C-r` | `gregorio-preview-clearout-region` |
+| `C-c C-p C-c C-b` | `gregorio-preview-clearout-buffer` |
+| `C-c C-p C-k` | `gregorio-preview-abort` |
+
+**Requirements**: `gregorio`, LuaLaTeX with GregorioTeX and `preview.sty` (all
+included in TeX Live), and `pdftocairo` (poppler). The versions of `gregorio`
+and GregorioTeX must match.
+
+```elisp
+;; Size of the previews relative to the default font.
+(setq gregorio-preview-scale 1.2)
+
+;; Line width: nil follows the window width, or a TeX dimension.
+(setq gregorio-preview-text-width "15cm")
+
+;; Extra LaTeX preamble code (fonts, GregorioTeX settings, ...).
+(setq gregorio-preview-preamble "\\grechangestaffsize{15}")
+
+;; Render scores in black instead of the theme's foreground color.
+(setq gregorio-preview-use-face-color nil)
+
+;; Use SVG images instead of PNG.
+(setq gregorio-preview-image-type 'svg)
+```
+
 ## Commands and key bindings
 
 | Key | Command | Description |
@@ -119,6 +173,7 @@ parse errors.
 | `C-c C-t` | `gregorio-convert-tags-to-ligatures` | `<sp>` tags → `æ`, `ǽ`, `œ` |
 | `C-c C-r` | `gregorio-format-buffer` | Format with gregorio-lsp or `grefmt` |
 | `C-c C-i` | `gregorio-insert-template` | Insert a starter template |
+| `C-c C-p …` | preview commands | See [Score preview](#score-preview) |
 | — | `gregorio-insert-header` | Header skeleton |
 | — | `gregorio-insert-nabc-header` | Header skeleton with `nabc-lines` |
 | — | `gregorio-restart-language-server` | Restart gregorio-lsp |
