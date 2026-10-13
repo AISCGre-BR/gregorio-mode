@@ -151,16 +151,30 @@ GABC files may contain arbitrary LaTeX, such as `<v>\tikzmarknode{a}{…}</v>`,
 which needs packages that a bare preview document does not load. The preview
 document gets them from three places:
 
-1. **The master document.** By default, gregorio-mode looks for a `.tex` file
-   that includes the score with `\gregorioscore{…}` (or `\includescore`). The
-   search starts in the directory of the GABC file and goes up
-   `gregorio-preview-master-search-depth` levels (3), never above the project
-   root. Its preamble (everything before `\begin{document}`) is reused, as are
-   the GregorioTeX setup commands (`\gresetX…`, `\grechangeX…`) that come
-   before the score in the document body. The directories of the master
-   document and of the GABC file are added to `TEXINPUTS`, so that relative
-   `\input` and local packages work. Set `gregorio-preview-master` to a file
-   name to choose the master document, or to `none` to disable this.
+1. **The master document.** By default, gregorio-mode looks for the `.tex`
+   file that includes the score: any command whose argument names the GABC
+   file counts, so `\gregorioscore{gabc/hymn}`, `\includescore{hymn}` and
+   custom macros such as `\MyScore*{gabc/hymn}` are all found (`\input`,
+   `\label`, `\includegraphics` and similar commands are ignored).
+   - **Where it searches:** inside a project (`project-current`, for example a
+     Git repository), every `.tex` file of the project; otherwise, the
+     directory of the GABC file and up to `gregorio-preview-master-search-depth`
+     (3) parent directories.
+   - **From fragment to root:** when the including file is only a fragment,
+     gregorio-mode follows its `%! TeX root = …` comment, its `subfiles`
+     document class or its AUCTeX `TeX-master` variable up to the root
+     document.
+   - **No including file:** the main document of the project root (`main.tex`,
+     or the only full document there) is used.
+   - **What is reused:** the root's preamble (everything before
+     `\begin{document}`), and the GregorioTeX setup commands (`\gresetX…`,
+     `\grechangeX…`) that come before the score in the root's body and in the
+     including file.
+   - **Where LuaLaTeX runs:** in the directory of the root document, and that
+     directory and the GABC directory are added to `TEXINPUTS`. So `\input`,
+     local packages and Lua `dofile` with paths relative to the project work.
+   - Set `gregorio-preview-master` to a `.tex` file name to choose the master
+     document, or to `none` to disable this.
 2. **`gregorio-preview-preamble`**, globally or per file.
    `M-x gregorio-preview-add-local-preamble` writes it as a file-local
    variable:
@@ -178,8 +192,8 @@ document gets them from three places:
 
 > **Security**: previews run LuaLaTeX on the LaTeX code of the score and of
 > the master document, and LuaLaTeX can run Lua code. Only preview files you
-> trust. Emacs asks before applying file-local values of
-> `gregorio-preview-preamble` and `gregorio-preview-master`.
+> trust. Emacs asks before applying a file-local value of
+> `gregorio-preview-preamble`.
 
 **Requirements**: `gregorio`, LuaLaTeX with GregorioTeX and `preview.sty` (all
 included in TeX Live), and `pdftocairo` (poppler). The versions of `gregorio`

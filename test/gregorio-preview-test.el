@@ -220,9 +220,12 @@ main.tex, which includes scores/hymn.gabc, and an unrelated other.tex."
   (gregorio-preview-test-with-project
     (should (equal (gregorio-preview--find-master
                     (expand-file-name "scores/hymn.gabc" dir))
-                   (expand-file-name "main.tex" dir)))
-    (should-not (gregorio-preview--find-master
-                 (expand-file-name "scores/unknown.gabc" dir)))
+                   (cons (expand-file-name "main.tex" dir)
+                         (expand-file-name "main.tex" dir))))
+    ;; A score that no file includes falls back to the main document.
+    (should (equal (gregorio-preview--find-master
+                    (expand-file-name "scores/unknown.gabc" dir))
+                   (list (expand-file-name "main.tex" dir))))
     (let ((gregorio-preview-master-search-depth 0))
       (should-not (gregorio-preview--find-master
                    (expand-file-name "scores/hymn.gabc" dir))))))
@@ -262,6 +265,124 @@ main.tex, which includes scores/hymn.gabc, and an unrelated other.tex."
              "\\grechangedim{spaceabovelines}{1cm}{scalable}"
              (cdr (gregorio-preview--master-preamble
                    (expand-file-name "main.tex" dir) "unknown"))))))
+
+(defmacro gregorio-preview-test-with-book (&rest body)
+  "Run BODY in a temporary Git project laid out like a LaTeX book.
+The variable `dir' is bound to the project directory.  main.tex loads
+preamble.sty (tikz, tikzmark and a Lua file read from a path relative
+to the project root) and includes source/index.tex, a subfile, which
+inputs source/partituras/hymn.tex.  That fragment declares its TeX root
+and includes source/gabc/hymn.gabc through a custom macro."
+  (declare (indent 0))
+  `(let ((dir (file-name-as-directory (make-temp-file "gregorio-book-" t))))
+     (unwind-protect
+         (cl-flet ((write (file &rest text)
+                     (let ((path (expand-file-name file dir)))
+                       (make-directory (file-name-directory path) t)
+                       (with-temp-file path (apply #'insert text)))))
+           (call-process "git" nil nil nil "init" "-q" dir)
+           (write "main.tex"
+                  "\\documentclass{article}\n\\usepackage{preamble}\n"
+                  "\\begin{document}\n\\subfile{source/index}\n\\end{document}\n")
+           (write "preamble.sty"
+                  "\\RequirePackage{tikz}\n\\usetikzlibrary{tikzmark}\n"
+                  "\\RequirePackage{gregoriotex}\n"
+                  "\\directlua{dofile(\"lib/setup.lua\")}\n"
+                  "\\newcommand{\\BookScore}[1]{\\gregorioscore{#1}}\n")
+           (write "lib/setup.lua" "token.set_macro(\"BookWord\", \"ok\")\n")
+           (write "source/index.tex"
+                  "\\documentclass[../main.tex]{subfiles}\n\\begin{document}\n"
+                  "\\input{source/partituras/hymn}\n\\end{document}\n")
+           (write "source/partituras/hymn.tex"
+                  "%! TeX root = ../../main.tex\n"
+                  "\\grechangestaffsize{15}\n"
+                  "\\BookScore{gabc/hymn}\n"
+                  "\\grechangestaffsize{20}\n")
+           (write "source/partituras/other.tex"
+                  "% -*- TeX-master: \"../../main\" -*-\n"
+                  "%%% Local Variables:\n%%% TeX-master: \"../../main\"\n"
+                  "%%% End:\n")
+           (write "source/gabc/template.tex"
+                  "\\documentclass{standalone}\n\\begin{document}\n"
+                  "\\gregorioscore{{{SCORE}}.gabc}\n\\end{document}\n")
+           (write "source/gabc/hymn.gabc"
+                  "name: Hymn;\n%%\n"
+                  "(c4) A(f) <v>\\tikzmarknode{x}{\\BookWord}</v>(g) (::)\n")
+           (write "source/gabc/orphan.gabc" "%%\n(c4) A(f)\n")
+           ,@body)
+       (delete-directory dir t))))
+
+(defun gregorio-preview-test-book-file (dir file)
+  "Return FILE of the book in DIR."
+  (expand-file-name file dir))
+
+(ert-deftest gregorio-preview-test-tex-root ()
+  (skip-unless (executable-find "git"))
+  (gregorio-preview-test-with-book
+    (let ((main (expand-file-name "main.tex" dir)))
+      (dolist (file '("main.tex" "source/index.tex"
+                      "source/partituras/hymn.tex"
+                      "source/partituras/other.tex"))
+        (should (file-equal-p (gregorio-preview--tex-root
+                               (expand-file-name file dir))
+                              main))))))
+
+(ert-deftest gregorio-preview-test-score-reference-kinds ()
+  (gregorio-preview-test-with-buffer ""
+    (with-syntax-table gregorio-preview--tex-syntax-table
+      (dolist (case '(("\\gregorioscore{hymn}" . t)
+                      ("\\gregorioscore[a]{gabc/hymn.gabc}" . t)
+                      ("\\MyScore*{gabc/hymn}" . t)
+                      ("\\includescore{hymn}" . t)
+                      ("\\input{source/partituras/hymn}" . nil)
+                      ("\\label{hymn}" . nil)
+                      ("\\includegraphics{hymn.png}" . nil)
+                      ("\\gregorioscore{hymn.tex}" . nil)
+                      ("% \\gregorioscore{hymn}" . nil)
+                      ("\\gregorioscore{{{SCORE}}.gabc}" . nil)))
+        (erase-buffer)
+        (insert (car case))
+        (should (eq (and (gregorio-preview--score-reference "hymn") t)
+                    (cdr case)))))))
+
+(ert-deftest gregorio-preview-test-find-master-book ()
+  (skip-unless (executable-find "git"))
+  (gregorio-preview-test-with-book
+    (let ((master (gregorio-preview--find-master
+                   (expand-file-name "source/gabc/hymn.gabc" dir))))
+      (should (file-equal-p (car master) (expand-file-name "main.tex" dir)))
+      (should (file-equal-p (cdr master)
+                            (expand-file-name "source/partituras/hymn.tex"
+                                              dir))))
+    ;; A score that no file includes falls back to the main document.
+    (let ((master (gregorio-preview--find-master
+                   (expand-file-name "source/gabc/orphan.gabc" dir))))
+      (should (file-equal-p (car master) (expand-file-name "main.tex" dir)))
+      (should-not (cdr master)))))
+
+(ert-deftest gregorio-preview-test-master-cache ()
+  (skip-unless (executable-find "git"))
+  (gregorio-preview-test-with-book
+    (let ((gregorio-lsp-client nil)
+          (enable-local-variables nil))
+      (with-current-buffer (find-file-noselect
+                            (expand-file-name "source/gabc/hymn.gabc" dir))
+        (unwind-protect
+            (let ((first (gregorio-preview--master)))
+              (should first)
+              (should gregorio-preview--master-cache)
+              (should (equal (gregorio-preview--master) first)))
+          (kill-buffer))))))
+
+(ert-deftest gregorio-preview-test-master-preamble-includer ()
+  (skip-unless (executable-find "git"))
+  (gregorio-preview-test-with-book
+    (let ((preamble (gregorio-preview--master-preamble
+                     (expand-file-name "main.tex" dir) "hymn"
+                     (expand-file-name "source/partituras/hymn.tex" dir))))
+      (should (string-match-p "\\\\usepackage{preamble}" (car preamble)))
+      ;; Setup commands before the score in the including file only.
+      (should (equal (cdr preamble) "\\grechangestaffsize{15}")))))
 
 (ert-deftest gregorio-preview-test-texinputs ()
   (gregorio-preview-test-with-project
@@ -450,6 +571,21 @@ main.tex, which includes scores/hymn.gabc, and an unrelated other.tex."
               (gregorio-preview-test-wait)
               (should (equal (gregorio-preview-test-states) '(shown))))
           (set-buffer-modified-p nil)
+          (kill-buffer))))))
+
+(ert-deftest gregorio-preview-test-integration-book ()
+  (skip-unless (and (gregorio-preview-test-toolchain-p)
+                    (executable-find "git")))
+  (gregorio-preview-test-with-book
+    (let ((gregorio-lsp-client nil)
+          (enable-local-variables nil))
+      (with-current-buffer (find-file-noselect
+                            (expand-file-name "source/gabc/hymn.gabc" dir))
+        (unwind-protect
+            (progn
+              (gregorio-preview-buffer)
+              (gregorio-preview-test-wait)
+              (should (equal (gregorio-preview-test-states) '(shown))))
           (kill-buffer))))))
 
 (provide 'gregorio-preview-test)

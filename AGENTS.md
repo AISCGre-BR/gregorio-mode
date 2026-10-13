@@ -99,8 +99,17 @@ downloads of the server binary.
   snippet starts and ends. `gregorio-preview--parse-log` assigns each error to
   its snippet, and snippet N is page N of the PDF. Do not add
   `-halt-on-error`: one bad line must not discard the others.
-- The preamble comes from the master document (`gregorio-preview--find-master`,
-  `gregorio-preview--master-preamble`) and `gregorio-preview-preamble`.
+- The preamble comes from the master document and `gregorio-preview-preamble`.
+  `gregorio-preview--find-master` finds the file that includes the score
+  (`gregorio-preview--score-reference` accepts any macro whose argument names
+  the GABC file, except those in `gregorio-preview--non-score-commands`), then
+  `gregorio-preview--tex-root` follows `%! TeX root`, `subfiles` and
+  `TeX-master` up to the root. The fallback is the project's main document.
+  The search recurses only inside a project, never from an arbitrary
+  ancestor. The result is cached per buffer (`gregorio-preview--master`).
+  `gregorio-preview--master-preamble` returns the root preamble plus the setup
+  commands of the root body and of the including file. LuaLaTeX runs in the
+  root's directory with `-output-directory` set to the job directory.
   `\PassOptionsToPackage` comes before the master's `\documentclass`, and the
   line width is set after `\begin{document}`, so that geometry and the
   master's own `preview` loading do not get in the way.

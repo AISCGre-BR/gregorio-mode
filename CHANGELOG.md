@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
   previews; `gregorio-preview-explain-error` (`C-c C-p C-e`) explains them.
 - `gregorio-preview-latex-passes` for packages that need two LuaLaTeX runs.
 
+### Fixed
+
+- Master documents of real LaTeX projects are now found:
+  - scores included through custom macros (e.g. `\MyScore*{gabc/name}`);
+  - including files anywhere in the project;
+  - fragments that declare their root with `%! TeX root`, a `subfiles` class
+    or `TeX-master`;
+  - a fallback to the project's main document.
+- LuaLaTeX now runs in the directory of the master document, so relative
+  `\input` and Lua `dofile` paths work; the setup commands of the including
+  file are applied.
+
 ## [0.1.0] - 2026-10-13
 
 ### Added

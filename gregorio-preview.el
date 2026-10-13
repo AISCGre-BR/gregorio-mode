@@ -82,21 +82,31 @@ such as tikzmark with `remember picture'."
 
 (defcustom gregorio-preview-master nil
   "LaTeX master document whose preamble is used by the previews.
-nil looks for a .tex file that includes the score with
-`\\gregorioscore' (see `gregorio-preview-master-search-depth'); `none'
-uses no master document; a file name uses that document.  A relative
-file name is relative to the directory of the GABC file.
+nil finds it automatically: it looks for a .tex file that includes
+the score, through `\\gregorioscore' or any other macro taking the
+score file name as argument (such as a custom `\\MyScore{gabc/name}'),
+and follows that file up to its root document (a `%! TeX root'
+comment, a `subfiles' document class or an AUCTeX `TeX-master' local
+variable).  See `gregorio-preview-master-search-depth'.
+
+`none' uses no master document; a file name uses that document.  A
+relative file name is relative to the directory of the GABC file.
 
 This is usually set as a file-local or directory-local variable."
   :type '(choice (const :tag "Find automatically" nil)
                  (const :tag "No master document" none)
                  (file :tag "Master document"))
-  :safe (lambda (v) (memq v '(nil none))))
+  ;; Pointing at another .tex file gives no more power than the
+  ;; automatic search, which already runs the preamble it finds.
+  :safe (lambda (v) (or (memq v '(nil none))
+                        (and (stringp v) (string-suffix-p ".tex" v)))))
 
 (defcustom gregorio-preview-master-search-depth 3
-  "How many parent directories to search for a master document.
-The search starts in the directory of the GABC file and never goes
-above the root of its project."
+  "How far up the automatic search for a master document goes.
+The search covers the directory of the GABC file and this many parent
+directories, never above the root of its project.  Inside a project,
+as found by `project-current', every .tex file of the project is also
+searched."
   :type 'natnum)
 
 (defcustom gregorio-preview-preamble ""
@@ -258,9 +268,19 @@ body keeps the initial and the annotation."
     table)
   "Syntax table used to scan LaTeX documents.")
 
-(defconst gregorio-preview--score-regexp
-  "\\\\\\(?:gregorioscore\\|includescore\\)\\*?[ \t\n]*\\(?:\\[[^]]*\\][ \t\n]*\\)?{\\([^}]*\\)}"
-  "Regexp matching a GregorioTeX command that includes a score file.")
+(defconst gregorio-preview--reference-regexp
+  "\\\\\\([A-Za-z@]+\\)\\*?[ \t\n]*\\(?:\\[[^]]*\\][ \t\n]*\\)?{\\([^{}]*\\)}"
+  "Regexp matching a LaTeX command with a file-like argument.
+Group 1 is the command name and group 2 the argument.")
+
+(defconst gregorio-preview--non-score-commands
+  '("input" "include" "subfile" "subfileinclude" "InputIfFileExists"
+    "includegraphics" "includepdf" "includeonly" "usepackage"
+    "RequirePackage" "documentclass" "bibliography" "addbibresource"
+    "label" "ref" "pageref" "eqref" "autoref" "cref" "Cref" "nameref"
+    "cite" "url" "href" "hyperref" "hyperlink" "hypertarget"
+    "begin" "end" "newcommand" "renewcommand" "def")
+  "Commands whose argument is never a GABC score.")
 
 (defconst gregorio-preview--setup-regexp
   "\\\\gre\\(?:set\\|change\\)[A-Za-z]+"
@@ -271,20 +291,25 @@ body keeps the initial and the annotation."
   (nth 4 (syntax-ppss)))
 
 (defun gregorio-preview--score-reference (name)
-  "Return the position of the first score inclusion of NAME, or nil.
+  "Return the position of the first inclusion of the score NAME, or nil.
 NAME is the base name of a GABC file, without directory and extension.
-The current buffer holds a LaTeX document."
+Any command whose argument names that file counts, such as
+\\gregorioscore{gabc/NAME} or a custom \\MyScore*{NAME.gabc}.  The
+current buffer holds a LaTeX document."
   (save-excursion
     (goto-char (point-min))
     (let ((case-fold-search nil) found)
       (while (and (not found)
-                  (re-search-forward gregorio-preview--score-regexp nil t))
-        (when (and (not (save-excursion
-                          (goto-char (match-beginning 0))
-                          (gregorio-preview--in-comment-p)))
-                   (equal (file-name-base (string-trim (match-string 1)))
-                          name))
-          (setq found (match-beginning 0))))
+                  (re-search-forward gregorio-preview--reference-regexp nil t))
+        (let ((command (match-string 1))
+              (arg (string-trim (match-string 2))))
+          (when (and (not (member command gregorio-preview--non-score-commands))
+                     (equal (file-name-base arg) name)
+                     (member (file-name-extension arg) '(nil "gabc"))
+                     (not (save-excursion
+                            (goto-char (match-beginning 0))
+                            (gregorio-preview--in-comment-p))))
+            (setq found (match-beginning 0)))))
       found)))
 
 (defmacro gregorio-preview--with-tex-file (file &rest body)
@@ -295,12 +320,71 @@ The current buffer holds a LaTeX document."
      (set-syntax-table gregorio-preview--tex-syntax-table)
      ,@body))
 
+(defun gregorio-preview--begin-document ()
+  "Return the position of \\begin{document} in the buffer, or nil."
+  (save-excursion
+    (goto-char (point-min))
+    (let ((case-fold-search nil) begin)
+      (while (and (not begin) (search-forward "\\begin{document}" nil t))
+        (unless (save-excursion (goto-char (match-beginning 0))
+                                (gregorio-preview--in-comment-p))
+          (setq begin (match-beginning 0))))
+      begin)))
+
+(defun gregorio-preview--tex-file (name dir)
+  "Return the .tex file NAME relative to DIR, adding the extension."
+  (let ((file (expand-file-name name dir)))
+    (if (and (not (file-exists-p file))
+             (file-exists-p (concat file ".tex")))
+        (concat file ".tex")
+      file)))
+
+(defun gregorio-preview--parent-document (file)
+  "Return the document that FILE declares as its root or main file.
+Return nil when FILE declares none.  The current buffer holds FILE."
+  (let ((dir (file-name-directory file))
+        (case-fold-search nil))
+    (save-excursion
+      (goto-char (point-min))
+      (cond
+       ((re-search-forward "^%+[ \t]*![ \t]*T[eE]X[ \t]+root[ \t]*=[ \t]*\\(.*?\\)[ \t]*$"
+                           nil t)
+        (gregorio-preview--tex-file (match-string 1) dir))
+       ((re-search-forward
+         "\\\\documentclass[ \t\n]*\\[\\([^]]+\\)\\][ \t\n]*{subfiles}" nil t)
+        (gregorio-preview--tex-file (string-trim (match-string 1)) dir))
+       ((re-search-forward "^%+[ \t]*TeX-master:[ \t]*\"\\([^\"]+\\)\"" nil t)
+        (gregorio-preview--tex-file (match-string 1) dir))))))
+
+(defun gregorio-preview--tex-root (file)
+  "Return the root LaTeX document of FILE, or nil.
+Follow root declarations (see `gregorio-preview--parent-document')
+until a document with \\begin{document} is reached."
+  (let (root seen)
+    (while (and file (not root) (not (member file seen))
+                (file-readable-p file))
+      (push file seen)
+      (gregorio-preview--with-tex-file file
+        (let ((parent (gregorio-preview--parent-document file)))
+          (cond
+           ((and parent (not (file-equal-p parent file))) (setq file parent))
+           ((gregorio-preview--begin-document) (setq root file))
+           (t (setq file nil))))))
+    root))
+
+(defun gregorio-preview--project-root (file)
+  "Return the root directory of the project of FILE, or nil."
+  (let ((project (project-current nil (file-name-directory
+                                        (expand-file-name file)))))
+    (and project (expand-file-name (project-root project)))))
+
 (defun gregorio-preview--search-directories (file)
-  "Return the directories searched for the master document of FILE."
-  (let* ((dir (file-name-directory (expand-file-name file)))
-         (project (project-current nil dir))
-         (root (and project (expand-file-name (project-root project))))
-         dirs)
+  "Return the directory of FILE and its ancestors, nearest first.
+At most `gregorio-preview-master-search-depth' ancestors are returned,
+never above the root of the project of FILE."
+  (let ((dir (file-name-directory (expand-file-name file)))
+        (root (gregorio-preview--project-root file))
+        dirs)
     (dotimes (_ (1+ gregorio-preview-master-search-depth))
       (when dir
         (push dir dirs)
@@ -310,29 +394,101 @@ The current buffer holds a LaTeX document."
                          parent)))))
     (nreverse dirs)))
 
-(defun gregorio-preview--find-master (file)
-  "Return a LaTeX document that includes the GABC FILE, or nil."
-  (let ((name (file-name-base file)))
-    (cl-loop for dir in (gregorio-preview--search-directories file)
-             thereis (cl-loop
-                      for tex in (directory-files dir t "\\.tex\\'" t)
-                      thereis (and (file-regular-p tex)
-                                   (file-readable-p tex)
-                                   (gregorio-preview--with-tex-file tex
-                                     (gregorio-preview--score-reference name))
-                                   tex)))))
+(defun gregorio-preview--candidate-files (file)
+  "Return the .tex files that may include the GABC FILE.
+Inside a project, every .tex file of the project is a candidate;
+otherwise, the .tex files of the directories returned by
+`gregorio-preview--search-directories'.  Files closer to FILE come
+first."
+  (let* ((dirs (gregorio-preview--search-directories file))
+         (root (gregorio-preview--project-root file))
+         (files (append
+                 (mapcan (lambda (dir) (directory-files dir t "\\.tex\\'" t))
+                         dirs)
+                 (and root
+                      (directory-files-recursively
+                       root "\\.tex\\'" nil
+                       (lambda (subdir)
+                         (not (string-prefix-p
+                               "." (file-name-nondirectory subdir)))))))))
+    (cl-remove-if-not
+     (lambda (tex) (and (file-regular-p tex) (file-readable-p tex)))
+     (delete-dups files))))
 
-(defun gregorio-preview--master-file ()
-  "Return the master document of the current buffer, or nil."
+(defun gregorio-preview--main-document (dir)
+  "Return the main LaTeX document at the top of DIR, or nil.
+That is main.tex when it is a full document, or else the only full
+document directly inside DIR."
+  (let ((documents
+         (cl-remove-if-not
+          (lambda (tex)
+            (and (file-regular-p tex)
+                 (file-readable-p tex)
+                 (gregorio-preview--with-tex-file tex
+                   (and (gregorio-preview--begin-document)
+                        (not (gregorio-preview--parent-document tex))))))
+          (directory-files dir t "\\.tex\\'" t))))
+    (or (cl-find "main.tex" documents
+                 :key #'file-name-nondirectory :test #'equal)
+        (and (= (length documents) 1) (car documents)))))
+
+(defun gregorio-preview--find-master (file)
+  "Find the master document of the GABC FILE.
+Return (ROOT . INCLUDER), where INCLUDER is the .tex file that includes
+the score and ROOT its root document.  When no file includes the
+score, fall back to the main document at the root of the project of
+FILE or, outside a project, in the nearest directory searched (see
+`gregorio-preview--main-document'), with a nil INCLUDER.  Return nil
+when there is no master document."
+  (let ((name (file-name-base file)))
+    (or (cl-loop for tex in (gregorio-preview--candidate-files file)
+                 thereis (and (gregorio-preview--with-tex-file tex
+                                (gregorio-preview--score-reference name))
+                              (let ((root (gregorio-preview--tex-root tex)))
+                                (and root (cons root tex)))))
+        (cl-loop for dir in (let ((root (gregorio-preview--project-root file)))
+                              (if root
+                                  (list root)
+                                (gregorio-preview--search-directories file)))
+                 thereis (let ((main (gregorio-preview--main-document dir)))
+                           (and main (list main)))))))
+
+(defvar-local gregorio-preview--master-cache nil
+  "Cached result of the master search: (GABC-FILE ROOT . INCLUDER).")
+
+(defun gregorio-preview--master ()
+  "Return (ROOT . INCLUDER) for the current buffer, or nil.
+See `gregorio-preview--find-master'.  INCLUDER is nil when the master
+document comes from `gregorio-preview-master'."
   (pcase gregorio-preview-master
     ('none nil)
     ((and (pred stringp) master)
      (let ((file (expand-file-name master)))
        (unless (file-readable-p file)
          (user-error "Master document %s not found" master))
-       file))
-    (_ (and buffer-file-name
-            (gregorio-preview--find-master buffer-file-name)))))
+       (list file)))
+    (_
+     (when buffer-file-name
+       (let ((cache gregorio-preview--master-cache)
+             (name (file-name-base buffer-file-name)))
+         (if (and cache
+                  (equal (car cache) buffer-file-name)
+                  (file-readable-p (cadr cache))
+                  ;; A fallback master (without includer) is searched
+                  ;; again, in case a file now includes the score.
+                  (cddr cache)
+                  (file-readable-p (cddr cache))
+                  (gregorio-preview--with-tex-file (cddr cache)
+                    (gregorio-preview--score-reference name)))
+             (cdr cache)
+           (let ((master (gregorio-preview--find-master buffer-file-name)))
+             (setq gregorio-preview--master-cache
+                   (and master (cons buffer-file-name master)))
+             master)))))))
+
+(defun gregorio-preview--master-file ()
+  "Return the master document of the current buffer, or nil."
+  (car (gregorio-preview--master)))
 
 (defun gregorio-preview--command-at-point ()
   "Return the LaTeX command at point with its arguments, as a string.
@@ -347,36 +503,49 @@ Point is at the backslash of the command and is moved after it."
       (forward-sexp 1))
     (buffer-substring-no-properties start (point))))
 
-(defun gregorio-preview--master-preamble (file name)
+(defun gregorio-preview--setup-commands (from name)
+  "Return the GregorioTeX setup commands between FROM and the score NAME.
+The search stops at the first inclusion of NAME, or at the end of the
+buffer.  Commented commands and \\gresetinitiallines are left out."
+  (let ((limit (or (gregorio-preview--score-reference name) (point-max)))
+        (case-fold-search nil)
+        setup)
+    (save-excursion
+      (goto-char from)
+      (while (re-search-forward gregorio-preview--setup-regexp limit t)
+        (goto-char (match-beginning 0))
+        (if (or (gregorio-preview--in-comment-p)
+                (looking-at-p "\\\\gresetinitiallines\\b"))
+            (goto-char (match-end 0))
+          (push (condition-case nil
+                    (gregorio-preview--command-at-point)
+                  (scan-error (goto-char (match-end 0)) nil))
+                setup))))
+    (delq nil (nreverse setup))))
+
+(defun gregorio-preview--master-preamble (file name &optional includer)
   "Return the preamble of the LaTeX document FILE as (PREAMBLE . SETUP).
 PREAMBLE is the text before \\begin{document}.  SETUP holds the
 GregorioTeX setup commands of the document body that come before the
 inclusion of the score NAME (or anywhere in the body if NAME is not
-included), except \\gresetinitiallines.  Return nil when FILE has no
-\\begin{document}."
-  (gregorio-preview--with-tex-file file
-    (goto-char (point-min))
-    (let ((case-fold-search nil) begin)
-      (while (and (not begin)
-                  (search-forward "\\begin{document}" nil t))
-        (unless (save-excursion (goto-char (match-beginning 0))
-                                (gregorio-preview--in-comment-p))
-          (setq begin (match-beginning 0))))
-      (when begin
-        (let ((preamble (buffer-substring-no-properties (point-min) begin))
-              (limit (or (gregorio-preview--score-reference name) (point-max)))
-              setup)
-          (goto-char begin)
-          (while (re-search-forward gregorio-preview--setup-regexp limit t)
-            (goto-char (match-beginning 0))
-            (if (or (gregorio-preview--in-comment-p)
-                    (looking-at-p "\\\\gresetinitiallines\\b"))
-                (goto-char (match-end 0))
-              (push (condition-case nil
-                        (gregorio-preview--command-at-point)
-                      (scan-error (goto-char (match-end 0)) nil))
-                    setup)))
-          (cons preamble (string-join (delq nil (nreverse setup)) "\n")))))))
+included), except \\gresetinitiallines.  When INCLUDER is another file,
+the setup commands that precede the score in INCLUDER are added.
+Return nil when FILE has no \\begin{document}."
+  (let ((result
+         (gregorio-preview--with-tex-file file
+           (let ((begin (gregorio-preview--begin-document)))
+             (when begin
+               (cons (buffer-substring-no-properties (point-min) begin)
+                     (gregorio-preview--setup-commands begin name)))))))
+    (when result
+      (when (and includer (not (file-equal-p includer file)))
+        (setcdr result
+                (append (cdr result)
+                        (gregorio-preview--with-tex-file includer
+                          (gregorio-preview--setup-commands
+                           (or (gregorio-preview--begin-document) (point-min))
+                           name)))))
+      (cons (car result) (string-join (cdr result) "\n")))))
 
 ;;; ---------------------------------------------------------------------------
 ;;; Rendering parameters
@@ -409,9 +578,11 @@ included), except \\gresetinitiallines.  Return nil when FILE has no
 (defun gregorio-preview--settings ()
   "Return the rendering settings for the current buffer as a plist."
   (let* ((dpi (gregorio-preview--dpi))
-         (master (gregorio-preview--master-file))
+         (found (gregorio-preview--master))
+         (master (car found))
          (name (and buffer-file-name (file-name-base buffer-file-name)))
-         (preamble (and master (gregorio-preview--master-preamble master name))))
+         (preamble (and master (gregorio-preview--master-preamble
+                                master name (cdr found)))))
     (list :dpi dpi
           :width (gregorio-preview--text-width dpi)
           :color (gregorio-preview--color)
@@ -649,12 +820,12 @@ This is a `cursor-sensor-functions' handler."
        (eq job (buffer-local-value 'gregorio-preview--current-job
                                    (gregorio-preview--job-buffer job)))))
 
-(defun gregorio-preview--run (job program args callback)
-  "Run PROGRAM with ARGS in the directory of JOB.
+(defun gregorio-preview--run (job program args callback &optional directory)
+  "Run PROGRAM with ARGS in DIRECTORY, by default the directory of JOB.
 CALLBACK is called with the exit status when PROGRAM finishes and JOB
 is still current."
   (let ((default-directory (file-name-as-directory
-                            (gregorio-preview--job-dir job)))
+                            (or directory (gregorio-preview--job-dir job))))
         (process-environment (append (gregorio-preview--job-env job)
                                      process-environment)))
     (gregorio-preview--log "$ %s %s\n" program (string-join args " "))
@@ -674,16 +845,18 @@ is still current."
 
 (defun gregorio-preview--run-sequence (job steps callback)
   "Run STEPS of JOB one after another, then call CALLBACK.
-Each step is a list (PROGRAM ARGS ON-EXIT); ON-EXIT is called with the
-exit status of PROGRAM."
+Each step is a list (PROGRAM ARGS ON-EXIT [DIRECTORY]); ON-EXIT is
+called with the exit status of PROGRAM, which runs in DIRECTORY (by
+default the directory of JOB)."
   (if (null steps)
       (funcall callback)
-    (pcase-let ((`(,program ,args ,on-exit) (car steps)))
+    (pcase-let ((`(,program ,args ,on-exit ,directory) (car steps)))
       (gregorio-preview--run
        job program args
        (lambda (status)
          (funcall on-exit status)
-         (gregorio-preview--run-sequence job (cdr steps) callback))))))
+         (gregorio-preview--run-sequence job (cdr steps) callback))
+       directory))))
 
 (defun gregorio-preview--read-file (file)
   "Return the contents of FILE as a string, or nil if it does not exist."
@@ -789,11 +962,20 @@ of pages of the PDF."
             (gregorio-preview--fail job ov "No image produced")))))))
 
 (defun gregorio-preview--latex-steps (job)
-  "Return the LuaLaTeX steps of JOB."
-  (make-list (plist-get (gregorio-preview--job-settings job) :passes)
-             (list gregorio-preview-latex-command
-                   (append gregorio-preview-latex-args '("preview.tex"))
-                   #'ignore)))
+  "Return the LuaLaTeX steps of JOB.
+LuaLaTeX runs in the directory of the master document, if any, so that
+paths relative to it (\\input, Lua `dofile', ...) work; its output goes
+to the directory of JOB."
+  (let* ((dir (gregorio-preview--job-dir job))
+         (master (plist-get (gregorio-preview--job-settings job) :master)))
+    (make-list (plist-get (gregorio-preview--job-settings job) :passes)
+               (list gregorio-preview-latex-command
+                     (append gregorio-preview-latex-args
+                             (list (concat "-output-directory="
+                                           (directory-file-name dir))
+                                   (expand-file-name "preview.tex" dir)))
+                     #'ignore
+                     (and master (file-name-directory master))))))
 
 (defun gregorio-preview--typeset (job)
   "Typeset the compiled chunks of JOB and install the resulting images.
@@ -807,7 +989,8 @@ of their page."
       (with-temp-file (expand-file-name "preview.tex" dir)
         (insert (gregorio-preview--latex-document
                  (mapcar (lambda (chunk)
-                           (cons (concat (nth 1 chunk) ".gtex") (nth 2 chunk)))
+                           (cons (expand-file-name (concat (nth 1 chunk) ".gtex") dir)
+                                 (nth 2 chunk)))
                          chunks)
                  (gregorio-preview--job-settings job))))
       (gregorio-preview--run-sequence
