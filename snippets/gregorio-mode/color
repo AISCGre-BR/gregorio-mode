@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Color markup
+# key: color
+# --
+<c>$1</c>$0

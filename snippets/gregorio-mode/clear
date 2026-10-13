@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Clear tag
+# key: clear
+# --
+<clear>$1</clear>$0

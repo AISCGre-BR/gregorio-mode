@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Colored responsory response
+# key: cr/.
+# --
+<c><sp>R/</sp>.</c>$0

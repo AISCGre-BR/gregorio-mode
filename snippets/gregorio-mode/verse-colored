@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Colored verse
+# key: cv/.
+# --
+<c><sp>V/</sp>.</c>$0

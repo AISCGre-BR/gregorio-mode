@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Verbatim close parenthesis
+# key: \)
+# --
+<v>)</v>$0

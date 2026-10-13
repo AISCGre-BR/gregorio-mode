@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Porrectus
+# key: porrectus
+# --
+$1($2$3$4)$0

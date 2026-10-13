@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Special hash
+# key: \#
+# --
+<sp>#</sp>$0

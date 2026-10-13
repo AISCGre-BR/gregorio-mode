@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Divisio
+# key: divisio
+# --
+(${1:$$(yas-choose-value '("," ";" ":"))})$0

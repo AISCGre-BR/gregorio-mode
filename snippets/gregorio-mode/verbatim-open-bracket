@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Verbatim open bracket
+# key: \[
+# --
+<v>[</v>$0

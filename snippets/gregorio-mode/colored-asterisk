@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Colored asterisk
+# key: c*
+# --
+<c>*</c>$0

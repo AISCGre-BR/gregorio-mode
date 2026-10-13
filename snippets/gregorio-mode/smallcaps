@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Small caps markup
+# key: smallcaps
+# --
+<sc>$1</sc>$0

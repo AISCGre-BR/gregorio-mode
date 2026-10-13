@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: No line break tag
+# key: nolinebreak
+# --
+<nlba>$1</nlba>$0

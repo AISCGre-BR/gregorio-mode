@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Special dash
+# key: \-
+# --
+<sp>-</sp>$0

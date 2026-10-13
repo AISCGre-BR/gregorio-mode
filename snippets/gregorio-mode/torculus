@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Torculus
+# key: torculus
+# --
+$1($2$3$4)$0

@@ -1,0 +1,12 @@
+# -*- mode: snippet -*-
+# name: GABC header
+# key: gabcheader
+# --
+name: ${1:Chant Name};
+office-part: ${2:antiphona};
+mode: ${3:1};
+annotation: ${4:I};
+book: ${5:Graduale Romanum};
+transcriber: ${6:Transcriber Name};
+%%
+(${7:c4}) $0

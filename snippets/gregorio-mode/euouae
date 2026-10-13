@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Euouae tag
+# key: euouae
+# --
+<eu>$1</eu>$0

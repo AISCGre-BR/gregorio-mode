@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Colored verbatim close parenthesis
+# key: c\)
+# --
+<c><v>)</v></c>$0

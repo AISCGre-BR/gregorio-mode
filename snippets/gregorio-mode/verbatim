@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Verbatim (LaTeX) tag
+# key: verbatim
+# --
+<v>$1</v>$0

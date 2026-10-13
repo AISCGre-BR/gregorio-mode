@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Elision tag
+# key: elision
+# --
+<e>$1</e>$0

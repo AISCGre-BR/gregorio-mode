@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Verse
+# key: v/.
+# --
+<sp>V/</sp>.$0

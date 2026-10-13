@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Colored verbatim close bracket
+# key: c\]
+# --
+<c><v>]</v></c>$0

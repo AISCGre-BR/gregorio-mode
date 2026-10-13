@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Teletype markup
+# key: teletype
+# --
+<tt>$1</tt>$0

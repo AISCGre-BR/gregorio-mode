@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Special underscore
+# key: \_
+# --
+<sp>_</sp>$0

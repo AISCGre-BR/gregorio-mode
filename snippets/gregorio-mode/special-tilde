@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Special tilde
+# key: \~
+# --
+<sp>~</sp>$0

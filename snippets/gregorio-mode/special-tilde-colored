@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Colored special tilde
+# key: c\~
+# --
+<c><sp>~</sp></c>$0

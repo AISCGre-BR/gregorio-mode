@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Colored plus
+# key: c+
+# --
+<c>+</c>$0

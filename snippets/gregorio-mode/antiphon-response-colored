@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Colored antiphon response
+# key: ca/.
+# --
+<c><sp>A/</sp>.</c>$0

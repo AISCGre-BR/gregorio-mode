@@ -1,0 +1,13 @@
+# -*- mode: snippet -*-
+# name: GABC header with NABC
+# key: nabcheader
+# --
+name: ${1:Chant Name};
+office-part: ${2:antiphona};
+mode: ${3:1};
+annotation: ${4:I};
+nabc-lines: ${5:1};
+book: ${6:St. Gall Manuscripts};
+transcriber: ${7:Transcriber Name};
+%%
+(${8:c4}) $0

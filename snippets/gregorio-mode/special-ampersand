@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Special ampersand
+# key: \&
+# --
+<sp>&</sp>$0

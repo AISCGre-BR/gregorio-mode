@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Responsory response
+# key: r/.
+# --
+<sp>R/</sp>.$0

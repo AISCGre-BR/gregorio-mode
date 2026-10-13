@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Above lines text tag
+# key: alt
+# --
+<alt>$1</alt>$0

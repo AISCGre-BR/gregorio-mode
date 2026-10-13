@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Special character tag
+# key: special
+# --
+<sp>$1</sp>$0

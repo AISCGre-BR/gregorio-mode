@@ -1,0 +1,5 @@
+# -*- mode: snippet -*-
+# name: Bold markup
+# key: bold
+# --
+<b>$1</b>$0
