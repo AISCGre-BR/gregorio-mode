@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- gregorio-lsp 0.12.0 support: `gregorio-lsp-settings` documents the new
+  `:wordPerLine` formatting setting (`"auto"`, `"always"`, `"never"`) and the
+  `isolated-strophae` rule for `:ignoreRules`; the `grefmt` fallback example
+  uses `--word-per-line`. Install instructions point to `v0.13.0`.
+
 - `gregorio-preview`: inline score previews in the spirit of AUCTeX's
   preview-latex. Each body line is engraved with gregorio, LuaLaTeX
   (GregorioTeX) and pdftocairo, asynchronously, and the image replaces the

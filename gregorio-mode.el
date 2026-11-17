@@ -93,11 +93,14 @@ still be started manually with \\[eglot] or \\[lsp]."
   "Settings sent to gregorio-lsp through `workspace/didChangeConfiguration'.
 A plist mirroring the server configuration, for example:
 
-  (:linting (:enabled t :severity \"warning\" :ignoreRules [])
+  (:linting (:enabled t :severity \"warning\"
+             :ignoreRules [\"isolated-strophae\"])
    :formatting (:maxLineWidth 80 :breakAfterClef :json-false
-                :breakAfterBar :json-false))
+                :breakAfterBar :json-false :wordPerLine \"auto\"))
 
-When nil, nothing is sent and the server defaults apply."
+`:wordPerLine' (\"auto\", \"always\" or \"never\") requires gregorio-lsp
+0.12.0 or later.  When nil, nothing is sent and the server defaults
+apply."
   :type '(plist :key-type symbol :value-type sexp))
 
 (defcustom gregorio-grefmt-command "grefmt"
@@ -106,7 +109,7 @@ When nil, nothing is sent and the server defaults apply."
 
 (defcustom gregorio-grefmt-args nil
   "Extra arguments passed to `gregorio-grefmt-command'.
-For example: (\"--width\" \"72\")."
+For example: (\"--width\" \"72\" \"--word-per-line\" \"always\")."
   :type '(repeat string))
 
 (defcustom gregorio-templates-directory
