@@ -59,9 +59,9 @@ grammar and the [gregorio-lsp](https://github.com/AISCGre-BR/gregorio-lsp) langu
 
   ```sh
   cargo install --git https://github.com/AISCGre-BR/gregorio-lsp \
-    --tag v0.12.0 gregorio-server --bin gregorio-lsp
+    --tag v0.13.0 gregorio-server --bin gregorio-lsp
   cargo install --git https://github.com/AISCGre-BR/gregorio-lsp \
-    --tag v0.12.0 gregorio-cli --bin grefmt   # optional formatter fallback
+    --tag v0.13.0 gregorio-cli --bin grefmt   # optional formatter fallback
   ```
 
   Make sure `~/.cargo/bin` is on your `PATH` (or `exec-path`), or set
