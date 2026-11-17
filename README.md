@@ -59,9 +59,9 @@ grammar and the [gregorio-lsp](https://github.com/AISCGre-BR/gregorio-lsp) langu
 
   ```sh
   cargo install --git https://github.com/AISCGre-BR/gregorio-lsp \
-    --tag v0.11.0 gregorio-server --bin gregorio-lsp
+    --tag v0.12.0 gregorio-server --bin gregorio-lsp
   cargo install --git https://github.com/AISCGre-BR/gregorio-lsp \
-    --tag v0.11.0 gregorio-cli --bin grefmt   # optional formatter fallback
+    --tag v0.12.0 gregorio-cli --bin grefmt   # optional formatter fallback
   ```
 
   Make sure `~/.cargo/bin` is on your `PATH` (or `exec-path`), or set
@@ -273,13 +273,16 @@ All commands are also available from the **Gregorio** menu.
 ;; Settings sent through workspace/didChangeConfiguration (see gregorio-lsp's
 ;; CONFIG.md). nil keeps the server defaults.
 (setq gregorio-lsp-settings
-      '(:linting (:enabled t :severity "warning" :ignoreRules [])
+      '(:linting (:enabled t :severity "warning"
+                  :ignoreRules ["isolated-strophae"])
         :formatting (:maxLineWidth 80
                      :breakAfterClef :json-false
-                     :breakAfterBar :json-false)))
+                     :breakAfterBar :json-false
+                     ;; "auto" | "always" | "never" (gregorio-lsp >= 0.12.0)
+                     :wordPerLine "auto")))
 
 ;; grefmt fallback used by `gregorio-format-buffer' without a server.
-(setq gregorio-grefmt-args '("--width" "80"))
+(setq gregorio-grefmt-args '("--width" "80" "--word-per-line" "auto"))
 
 ;; Format on save.
 (add-hook 'gregorio-mode-hook
